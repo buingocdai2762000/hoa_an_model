@@ -1,0 +1,6 @@
+{
+  "name": "Huyết Ấn Biên Niên Sử",
+  "description": "Game chiến thuật đánh theo lượt phong cách Fire Emblem với đồ họa pixel hiện đại, cốt truyện 10 hồi xuyên suốt và 120 bản đồ chiến dịch dành cho PC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

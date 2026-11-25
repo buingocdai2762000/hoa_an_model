@@ -1,0 +1,294 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-sans: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    background-color: #0b0e14;
+    color: #ede7d9;
+    user-select: none;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pixel-art {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.tactical-panel {
+  background: linear-gradient(180deg, rgba(22, 27, 39, 0.96) 0%, rgba(14, 18, 28, 0.98) 100%);
+  border: 1px solid rgba(196, 159, 92, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 236, 194, 0.14),
+    0 10px 28px rgba(0, 0, 0, 0.58);
+}
+
+.tactical-panel-subtle {
+  background: rgba(15, 19, 29, 0.92);
+  border: 1px solid rgba(168, 141, 91, 0.28);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.46);
+}
+
+.text-stroke-dark {
+  text-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.9),
+    0 1px 1px rgba(0, 0, 0, 0.95);
+}
+
+/* Custom sleek scrollbar for 120-map chronicle */
+.chronicle-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.chronicle-scroll::-webkit-scrollbar-track {
+  background: rgba(11, 14, 20, 0.6);
+}
+
+.chronicle-scroll::-webkit-scrollbar-thumb {
+  background: rgba(196, 159, 92, 0.4);
+  border-radius: 3px;
+}
+
+.chronicle-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 178, 108, 0.65);
+}
+
+/* Rewarding Level-Up Toast Animations (HD-2D Tactical Emblem Feel) */
+@keyframes lvlup-card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.86);
+  }
+  58% {
+    opacity: 1;
+    transform: translateY(3px) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lvlup-border-glow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 1px 0 rgba(254, 240, 138, 0.35),
+      0 0 18px rgba(251, 191, 36, 0.35),
+      0 14px 32px rgba(0, 0, 0, 0.72);
+  }
+  50% {
+    box-shadow:
+      inset 0 1px 0 rgba(254, 249, 195, 0.6),
+      0 0 32px rgba(251, 191, 36, 0.68),
+      0 14px 36px rgba(0, 0, 0, 0.78);
+  }
+}
+
+@keyframes lvlup-sheen-sweep {
+  0% {
+    transform: translateX(-140%) skewX(-24deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.75;
+  }
+  65% {
+    opacity: 0.45;
+  }
+  100% {
+    transform: translateX(260%) skewX(-24deg);
+    opacity: 0;
+  }
+}
+
+@keyframes lvlup-level-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55) rotate(-6deg);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.12) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes lvlup-stat-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.76);
+    filter: brightness(1.8);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.06);
+    filter: brightness(1.25);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: brightness(1);
+  }
+}
+
+@keyframes lvlup-arrow-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes lvlup-promo-pulse {
+  0%,
+  100% {
+    border-color: rgba(251, 191, 36, 0.65);
+    background-color: rgba(69, 26, 3, 0.85);
+  }
+  50% {
+    border-color: rgba(254, 240, 138, 1);
+    background-color: rgba(120, 53, 15, 0.9);
+  }
+}
+
+.lvlup-card-enter {
+  animation: lvlup-card-enter 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.lvlup-border-glow {
+  animation:
+    lvlup-card-enter 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+    lvlup-border-glow 1.35s ease-in-out 0.25s infinite;
+}
+
+.lvlup-sheen-sweep {
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(254, 240, 138, 0) 0%,
+    rgba(254, 240, 138, 0.36) 50%,
+    rgba(254, 240, 138, 0) 100%
+  );
+  animation: lvlup-sheen-sweep 0.95s ease-out 0.12s forwards;
+}
+
+.lvlup-level-pop {
+  animation: lvlup-level-pop 0.48s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
+
+.lvlup-stat-pop {
+  opacity: 0;
+  animation: lvlup-stat-pop 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lvlup-arrow-bounce {
+  animation: lvlup-arrow-bounce 0.8s ease-in-out 0.35s infinite;
+}
+
+@keyframes lvlup-portrait-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(-16px) scale(0.84);
+    filter: brightness(1.45);
+  }
+  60% {
+    opacity: 1;
+    transform: translateX(2px) scale(1.03);
+    filter: brightness(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: brightness(1);
+  }
+}
+
+.lvlup-portrait-enter {
+  animation: lvlup-portrait-enter 0.44s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.lvlup-promo-pulse {
+  animation: lvlup-promo-pulse 1.2s ease-in-out infinite;
+}
+
+/* Combat Dialogue Bubble Animations */
+@keyframes combat-bubble-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.86);
+  }
+  65% {
+    opacity: 1;
+    transform: translate(-50%, -2px) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes combat-bubble-low-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 10px rgba(239, 68, 68, 0.35),
+      0 6px 16px rgba(0, 0, 0, 0.72);
+  }
+  50% {
+    box-shadow:
+      0 0 18px rgba(248, 113, 113, 0.65),
+      0 6px 18px rgba(0, 0, 0, 0.8);
+  }
+}
+
+.combat-bubble-pop {
+  animation: combat-bubble-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.combat-bubble-low-pulse {
+  animation:
+    combat-bubble-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+    combat-bubble-low-pulse 1.15s ease-in-out 0.24s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
