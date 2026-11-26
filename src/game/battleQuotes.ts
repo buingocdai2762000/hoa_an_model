@@ -15,6 +15,7 @@ export type BattleVoiceArchetype =
   | 'FLIER'
   | 'ASSASSIN'
   | 'DARK_MAGE'
+  | 'NAVAL'
   | 'ENEMY_BOSS'
   | 'ENEMY_SOLDIER';
 
@@ -48,36 +49,28 @@ export interface PickBattleQuoteOptions {
 }
 
 export const ARCHETYPE_LABELS: Record<BattleVoiceArchetype, string> = {
-  ROYAL_LORD: 'Quân Chủ',
-  CAVALIER: 'Kỵ Sĩ',
-  ARMORED: 'Trọng Giáp',
-  ARCHER: 'Cung Thủ',
-  MAGE: 'Pháp Sư',
-  CLERIC: 'Thánh Chức',
-  DUELIST: 'Kiếm Khách',
-  BERSERKER: 'Cuồng Chiến',
-  FLIER: 'Không Kỵ',
-  ASSASSIN: 'Ám Sát',
-  DARK_MAGE: 'Hắc Thuật',
-  ENEMY_BOSS: 'Thủ Lĩnh',
-  ENEMY_SOLDIER: 'Chiến Binh',
+  ROYAL_LORD: 'Chỉ Huy',
+  CAVALIER: 'Cơ Giới',
+  ARMORED: 'Thiết Giáp',
+  ARCHER: 'Bắn Tỉa / PK',
+  MAGE: 'Pháo Binh',
+  CLERIC: 'Quân Y',
+  DUELIST: 'Xung Kích',
+  BERSERKER: 'Hỏa Lực Nặng',
+  FLIER: 'Không Quân',
+  ASSASSIN: 'Đặc Nhiệm',
+  DARK_MAGE: 'Trọng Pháo',
+  NAVAL: 'Hải Quân',
+  ENEMY_BOSS: 'Tư Lệnh Địch',
+  ENEMY_SOLDIER: 'Quân Trục',
 };
 
-/**
- * Computes normalized HP percentage (0..100) from current and max HP.
- */
 export function computeHpPercent(hp: number, maxHp: number): number {
   const safeMax = Math.max(1, maxHp);
   const clamped = Math.max(0, Math.min(safeMax, hp));
   return Math.round((clamped / safeMax) * 100);
 }
 
-/**
- * Classifies unit HP ratio into 3 distinct emotional combat bands:
- * - HIGH: >= 65% HP (confident, composed, commanding)
- * - MID:  30%..64% HP (focused, gritty, battle-hardened)
- * - LOW:  < 30% HP (desperate, defiant last-stand resolve)
- */
 export function getHpBand(hp: number, maxHp: number): HpBand {
   const safeMax = Math.max(1, maxHp);
   const ratio = Math.max(0, Math.min(1, hp / safeMax));
@@ -86,114 +79,94 @@ export function getHpBand(hp: number, maxHp: number): HpBand {
   return 'LOW';
 }
 
-/**
- * Maps any of the 121 classes across all 30 lineages (plus enemy bosses & soldiers)
- * to a distinct Combat Voice Archetype using class metadata, lineage id, moveType, and weapon.
- */
 export function resolveBattleVoiceArchetype(
   unit: Pick<Unit, 'classId' | 'faction' | 'isBoss' | 'isLord' | 'moveType' | 'weapon'>
 ): BattleVoiceArchetype {
-  if (unit.faction === 'ENEMY' && unit.isBoss) {
-    return 'ENEMY_BOSS';
+  if (unit.faction === 'ENEMY') {
+    return unit.isBoss ? 'ENEMY_BOSS' : 'ENEMY_SOLDIER';
   }
 
   const meta = CLASS_META[unit.classId];
   const key = `${unit.classId} ${meta?.name ?? ''}`.toUpperCase();
 
-  // 1. Royal / Sovereign Lord classes (respects reclassing if a Lord changes into Mage/Wyvern/etc.)
-  if (
-    /\b(LORD|GREAT_LORD|SOVEREIGN|EMPEROR_LORD|PRINCE|MONARCH|CROWN|VALORIA)\b/.test(key) &&
-    !/(WYVERN|DRAGON|DARK|SHADOW|WAR)/.test(key)
-  ) {
+  // 1. Naval Warships & Submarines
+  if (unit.moveType === 'NAVAL' || meta?.moveType === 'NAVAL' || meta?.domain === 'NAVAL') {
+    return 'NAVAL';
+  }
+
+  // 2. Field Commanders (LORD lineage)
+  if (/\b(LORD|GREAT_LORD|SOVEREIGN|EMPEROR_LORD)\b/.test(unit.classId)) {
     return 'ROYAL_LORD';
   }
 
-  // 2. Dark / Occult / Necromancer casters
-  if (/(DARK|NECRO|WARLOCK|LICH|OCCULT|VOID|ABYSS|HEX|BLOOD|CURSE|DOOM|SHADOW_MAGE)/.test(key)) {
+  // 3. Heavy Siege & Railway Artillery
+  if (/\b(DARK_MAGE|NECROMANCER|DARK_DRUID|ABYSSAL_ARCHON)\b/.test(unit.classId)) {
     return 'DARK_MAGE';
   }
 
-  // 3. Assassins / Rogues / Ninjas
-  if (/(THIEF|ASSASSIN|NINJA|ROGUE|SHINOBI|PHANTOM|TRICKSTER|SHADOW|NIGHTBLADE|NIGHTSTALKER|SPY|WHISPER)/.test(key)) {
+  // 4. Recon / SOE / OSS / SAS Commandos
+  if (/\b(THIEF|ASSASSIN|WHISPER|PHANTOM_REAPER|NINJA|MASTER_NINJA|SHADOW_KAGE|PHANTOM_SHOGUN)\b/.test(unit.classId)) {
     return 'ASSASSIN';
   }
 
-  // 4. Clerics / Healers / Priests / Saints
+  // 5. Field Medics & Repair Engineers
   if (
     unit.weapon?.type === 'STAFF' ||
-    /(CLERIC|PRIEST|BISHOP|SAINT|ORACLE|MONK|SHRINE|TEMPLAR|DIVINER|SERAPH|HEALER|INQUISITOR)/.test(key)
+    /\b(CLERIC|BISHOP|SAINT|SERAPH_PROPHET|WAR_CLERIC|BATTLE_PRIEST|CRUSADER_BISHOP|WRATHFUL_SERAPH)\b/.test(unit.classId)
   ) {
     return 'CLERIC';
   }
 
-  // 5. Flying riders (Wyvern / Pegasus / Gryphon / Sky)
-  if (
-    unit.moveType === 'FLYING' ||
-    meta?.moveType === 'FLYING' ||
-    /(WYVERN|PEGASUS|FALCON|GRYPHON|SKY|KINSHI|DRAGONLORD|DRAKE|WING)/.test(key)
-  ) {
+  // 6. Military Aircraft (Fighters, Dive Bombers, Seaplanes, B-17)
+  if (unit.moveType === 'FLYING' || meta?.moveType === 'FLYING' || meta?.domain === 'AIRCRAFT') {
     return 'FLIER';
   }
 
-  // 6. Archers / Snipers / Marksmen
-  if (
-    unit.weapon?.type === 'BOW' ||
-    /(ARCHER|SNIPER|BOW|HUNTER|RANGER|DEADEYE|MARKSMAN|BALLISTA)/.test(key)
-  ) {
+  // 7. Snipers & Anti-Air Flak Batteries
+  if (unit.weapon?.type === 'BOW' || /\b(ARCHER|SNIPER|MARKSMAN|STARFALL_ARCHER)\b/.test(unit.classId)) {
     return 'ARCHER';
   }
 
-  // 7. Arcane / Elemental Mages & Sages
+  // 8. Field Artillery, Katyusha Rockets & Radar Fire-Control
   if (
     unit.weapon?.type === 'TOME' ||
-    /(MAGE|SAGE|WIZARD|ARCHMAGE|ARCAN|ELEMENT|CHRONO|ASTRAL|RUNE|PYRO|CRYO|STORM_CALLER|MYSTIC|SPELL)/.test(key)
+    meta?.domain === 'ARTILLERY' ||
+    /\b(MAGE|SAGE|ARCHSAGE|ASTRAL_ORACLE|MONK|EXORCIST|INQUISITOR|SOLAR_HIEROPHANT|SHAMAN|SPIRIT_CALLER|ELDER_ORACLE|PRIMORDIAL_AVATAR|CHRONOMANCER|ASTROLOGER|TIME_WEAVER|ETERNAL_CHRONOS)\b/.test(
+      unit.classId
+    )
   ) {
     return 'MAGE';
   }
 
-  // 8. Heavy Armored Knights / Generals / Bastions
-  if (
-    unit.moveType === 'ARMORED' ||
-    meta?.moveType === 'ARMORED' ||
-    /(ARMOR|KNIGHT|GENERAL|BASTION|AEGIS|SENTINEL|GUARDIAN|PHALANX|FORTRESS|TITAN|WARDEN)/.test(key)
-  ) {
+  // 9. Heavy Breakthrough Tanks & Tank Destroyers
+  if (unit.moveType === 'ARMORED' || meta?.moveType === 'ARMORED') {
     return 'ARMORED';
   }
 
-  // 9. Mounted Cavaliers / Paladins / Lancers
-  if (
-    unit.moveType === 'MOUNTED' ||
-    meta?.moveType === 'MOUNTED' ||
-    /(CAVALIER|PALADIN|VALKYRIE|DRAGOON|CHARGER|JOUSTER|HORSE|NOMAD|TROUBADOUR)/.test(key)
-  ) {
+  // 10. Medium Tanks, Half-Tracks & Motorized Hellcats
+  if (unit.moveType === 'MOUNTED' || meta?.moveType === 'MOUNTED') {
     return 'CAVALIER';
   }
 
-  // 10. Axe Fighters / Berserkers / Warriors / Brigands
+  // 11. Heavy Machine Gunners, Flamethrowers & Demolition Sappers
   if (
     unit.weapon?.type === 'AXE' ||
-    /(FIGHTER|WARRIOR|BERSERKER|BRIGAND|BARBARIAN|VIKING|GLADIATOR|RAIDER|BREAKER|JUGGERNAUT|BRAWLER|PIRATE|CORSAIR)/.test(
-      key
-    )
+    /\b(FIGHTER|BERSERKER|REAVER|WAR_GOD|BRAWLER|WAR_MONK|IRON_FIST_MASTER|TITAN_DEMIGOD)\b/.test(key)
   ) {
     return 'BERSERKER';
   }
 
-  // 11. Sword Duelists / Myrmidons / Mercenaries / Samurai
+  // 12. Assault Infantry, SMG Commandos, Marines & Anti-Tank Infantry
   if (
     unit.weapon?.type === 'SWORD' ||
-    /(MYRMIDON|SWORD|BLADE|SAMURAI|RONIN|KENSEI|MERCENARY|HERO|DUELIST|FENCER|VANGUARD|SPEARMASTER|HALBERDIER)/.test(
-      key
+    /\b(MYRMIDON|SWORDMASTER|TRUEBLADE|SWORD_SAINT|MERCENARY|HERO|VANGUARD|LEGEND_CHAMPION|SOLDIER|HALBERDIER|SENTINEL|SPEAR_EMPEROR|SAMURAI|RONIN_MASTER|SHOGUN_BLADE|HEAVEN_KENSEI|SPELLBLADE|MORTAL_SAVANT|RUNE_BLADE|AETHER_SOVEREIGN)\b/.test(
+      unit.classId
     )
   ) {
     return 'DUELIST';
   }
 
-  // 12. Fallback for generic soldiers (spearmen / foot guards)
-  if (unit.faction === 'ENEMY') {
-    return 'ENEMY_SOLDIER';
-  }
-  return 'CAVALIER';
+  return 'DUELIST';
 }
 
 type QuoteTable = Record<BattleVoiceArchetype, Record<HpBand, readonly string[]>>;
@@ -201,321 +174,341 @@ type QuoteTable = Record<BattleVoiceArchetype, Record<HpBand, readonly string[]>
 export const BATTLE_QUOTE_POOLS: QuoteTable = {
   ROYAL_LORD: {
     HIGH: [
-      'Nhân danh Valoria, tiến lên!',
-      'Kiếm của ta định đoạt trận này!',
-      'Đừng hòng vượt qua tuyến phòng thủ!',
-      'Ánh sáng vương ấn sẽ dẫn lối!',
-      'Hãy chứng kiến uy nghi của ta!',
+      'Toàn tiểu đoàn nghe lệnh — xung phong!',
+      'Đã khóa mục tiêu tiền phương, khai hỏa!',
+      'Phòng tuyến Liên Minh quyết không lùi bước!',
+      'Hiệp đồng hỏa lực — mở đột phá khẩu!',
+      'Vì tự do và hòa bình, tiến lên!',
     ],
     MID: [
-      'Vết thương này chẳng là gì cả!',
-      'Giữ vững đội hình, ta chưa gục!',
-      'Ngươi khá lắm… nhưng chưa đủ!',
-      'Ta sẽ mở đường cho đồng đội!',
-      'Ý chí vương tộc không thể lay chuyển!',
+      'Trúng mảnh đạn sượt thôi — giữ vững chiến hào!',
+      'Đài chỉ huy vẫn hoạt động, tiếp tục bắn!',
+      'Địch phản kích rát đấy, yểm trợ lẫn nhau!',
+      'Không bỏ vị trí! Đẩy lùi bọn chúng!',
+      'Nạp đạn nhanh — phản công ngay lập tức!',
     ],
     LOW: [
-      'Ta không thể ngã xuống ở đây!',
-      'Dù cạn sức, ta vẫn sẽ chiến đấu!',
-      'Một đòn cuối vì danh dự Valoria!',
-      'Chưa kết thúc đâu… đỡ lấy đi!',
-      'Lưỡi kiếm này sẽ không bao giờ gãy!',
+      'Còn viên đạn cuối cùng cũng quyết giữ chốt!',
+      'Không kẻ địch nào bước qua được công sự này!',
+      'Tập trung toàn bộ hỏa lực vào phát bắn này!',
+      'Dù kiệt sức vẫn đứng vững nơi tuyến đầu!',
+      'Vì đồng đội phía sau — bóp cò!',
     ],
   },
 
   CAVALIER: {
     HIGH: [
-      'Xung phong! Đạp nát đội hình địch!',
-      'Ngọn thương kỵ sĩ không hề chệch hướng!',
-      'Tiến lên nào, chiến mã của ta!',
-      'Kỵ binh Valoria mở đường máu!',
-      'Tốc độ này ngươi không kịp đỡ đâu!',
+      'Động cơ tối đa! Thiết giáp xung kích!',
+      'Tháp pháo đã ngắm chuẩn — bắn hành tiến!',
+      'Xích thép Sherman mở đường cho bộ binh!',
+      'Tốc độ cơ giới này địch không kịp xoay nòng đâu!',
+      'Bọc sườn đội hình địch — khai hỏa!',
     ],
     MID: [
-      'Còn thở là còn xung kích!',
-      'Đỡ lấy cú đâm phá giáp này!',
-      'Chiến mã chưa chùn bước, ta cũng vậy!',
-      'Chuyển thế! Phản công ngay lập tức!',
-      'Đừng coi thường kỵ sĩ tiền tuyến!',
+      'Đạn sượt vỏ tháp pháo rồi, vẫn cơ động tốt!',
+      'Nạp đạn xuyên giáp! Trả đòn ngay!',
+      'Hộp số vẫn chạy êm — tiến sát kết liễu!',
+      'Giữ đội hình mũi nhọn thiết giáp!',
+      'Đừng để pháo chống tăng địch khóa mục tiêu!',
     ],
     LOW: [
-      'Một cú đột kích cuối cùng!',
-      'Giáp vỡ thì sao? Ta vẫn lao tới!',
-      'Vì đồng đội phía sau, tiến lên!',
-      'Đòn này đổi cả mạng cũng đáng!',
-      'Kỵ sĩ không bao giờ quay lưng!',
+      'Khói bốc khoang máy rồi… bắn viên quyết định!',
+      'Xích đứt một bên thì biến thành lô cốt thép!',
+      'Đưa viên đạn xuyên giáp cuối cùng vào buồng pháo!',
+      'Chiến xa Liên Minh không bao giờ đầu hàng!',
+      'Nổ tung mục tiêu trước khi động cơ tắt!',
     ],
   },
 
   ARMORED: {
     HIGH: [
-      'Tường thép bất khả xâm phạm!',
-      'Đánh tới đi, giáp ta không hề hấn!',
-      'Bước qua xác ta trước đã!',
-      'Sức nặng của thép sẽ nghiền nát ngươi!',
-      'Vững như bàn thạch giữa chiến trường!',
+      'Giáp nghiêng thép đúc — bắn vào chỉ nảy đạn thôi!',
+      'Siêu tăng hạng nặng tiến lên nghiền nát lô cốt!',
+      'Khóa tầm pháo chính — một phát xuyên tâm!',
+      'Bức tường thiết giáp bất khả xâm phạm!',
+      'Sức nặng của thép sẽ đè bẹp phòng tuyến địch!',
     ],
     MID: [
-      'Khá đau đấy… nhưng vẫn trụ vững!',
-      'Khiên này chưa nứt đâu, nhào vô!',
-      'Giữ chặt tuyến đầu, không lùi một bước!',
-      'Lực đánh đó chỉ làm ta nóng máy thôi!',
-      'Đến lượt ta đáp lễ rồi!',
+      'Chấn động mạnh đấy, nhưng giáp trước chưa thủng!',
+      'Xoay tháp pháo 12 giờ — đáp lễ bằng đạn nặng!',
+      'Giữ chặt chốt chặn cầu, không lùi nửa mét!',
+      'Chỉ tróc sơn ngoài thôi, khai hỏa!',
+      'Pháo tự hành đã nạp xong — bắn!',
     ],
     LOW: [
-      'Giáp nát, nhưng ý chí vẫn là thép!',
-      'Ta đứng đây, không kẻ nào qua được!',
-      'Một hơi thở cuối… giữ vững chiến tuyến!',
-      'Nghiền nát ngươi trước khi ta gục!',
-      'Pháo đài này sẽ không sụp đổ!',
+      'Khoang lái đầy khói… nhưng pháo chính vẫn nổ được!',
+      'Chặn đứng chúng ngay tại đây bằng mọi giá!',
+      'Viên đạn liều phóng tối đa — xuyên thủng chúng đi!',
+      'Pháo đài thép này quyết không gục ngã!',
+      'Đứng vững như bàn thạch giữa biển lửa!',
     ],
   },
 
   ARCHER: {
     HIGH: [
-      'Đã khóa mục tiêu. Bắn!',
-      'Mũi tên này không bao giờ trượt!',
-      'Tầm ngắm hoàn hảo… tiễn ngươi lên đường!',
-      'Nghe tiếng gió rít không? Quá muộn rồi!',
-      'Một phát xuyên tâm, gọn ghẽ!',
+      'Tâm kính ngắm đã khớp mục tiêu. Bóp cò!',
+      'Đã tính đủ tốc độ gió — một viên hạ gục!',
+      'Lưới lửa phòng không khóa chặt bầu trời!',
+      'Đừng hòng lọt qua tầm ngắm quang học này!',
+      'Mục tiêu nằm gọn trong thước ngắm — bắn!',
     ],
     MID: [
-      'Hít sâu… giữ vững dây cung!',
-      'Đừng hòng áp sát tầm bắn của ta!',
-      'Còn tên trong ống là ngươi còn nguy!',
-      'Nhắm chuẩn điểm yếu mà bắn!',
-      'Thử né mũi tên này xem nào!',
+      'Nín thở… giữ ổn định báng súng!',
+      'Thay vị trí bắn tỉa và phản kích ngay!',
+      'Nòng phòng không đang nóng đỏ — tiếp đạn nhanh!',
+      'Nhắm thẳng khe quan sát của chúng mà bắn!',
+      'Thử né viên đạn xuyên giáp tầm xa này xem!',
     ],
     LOW: [
-      'Tay run rồi… nhưng mắt vẫn sắc!',
-      'Mũi tên sinh tử! Trúng đi!',
-      'Không được trượt… tất cả vào phát này!',
-      'Còn một mũi tên cuối cho ngươi!',
-      'Đừng mơ hạ gục xạ thủ dễ thế!',
+      'Kính ngắm nứt rồi… bắn bằng thước ngắm cơ khí!',
+      'Viên đạn sinh tử cuối cùng trong hộp tiếp đạn!',
+      'Không được phép trượt — kết thúc mục tiêu!',
+      'Còn giữ cò súng là bầu trời này còn vững!',
+      'Một phát quyết định từ đống đổ nát!',
     ],
   },
 
   MAGE: {
     HIGH: [
-      'Nguyên tố cổ xưa, nghe lệnh ta!',
-      'Ma lực hội tụ… tan thành tro bụi đi!',
-      'Kiến thức là lưỡi kiếm sắc nhất!',
-      'Chiêm ngưỡng sức mạnh pháp thuật thực thụ!',
-      'Chú ngữ hoàn tất — khai hỏa!',
+      'Tọa độ pháo binh đã khớp — toàn khẩu đội cấp tập!',
+      'Nâng góc tầm… dội bão lửa xuống trận địa địch!',
+      'Dàn Katyusha đã lên bệ phóng — khai hỏa!',
+      'Đạn nổ phá mảnh rơi trúng đỉnh công sự rồi!',
+      'Hiệu chỉnh thước tầm hoàn tất — phóng!',
     ],
     MID: [
-      'Không được mất tập trung… niệm chú!',
-      'Ma lực vẫn còn dồi dào lắm!',
-      'Ngươi ép ta phải dùng cấm thuật rồi!',
-      'Phá vỡ phòng ngự bằng dòng chảy ma năng!',
-      'Đừng để áp lực làm rối loạn pháp trận!',
+      'Địch đang phản pháo! Giữ vững trận địa pháo!',
+      'Nạp liều phóng tăng cường — bắn trùm mục tiêu!',
+      'Khói lửa mù mịt nhưng tọa độ radar vẫn rõ!',
+      'Chuyển sang chế độ bắn gấp không khoan nhượng!',
+      'Tiếp đạn nhanh lên, đừng để ngắt nhịp pháo kích!',
     ],
     LOW: [
-      'Dốc cạn toàn bộ ma lực vào đòn này!',
-      'Dù kiệt sức… phép thuật sẽ thiêu rụi ngươi!',
-      'Ngọn lửa cuối cùng, bùng cháy đi!',
-      'Ta chưa thể ngã… giải phóng toàn lực!',
-      'Hồn lực cộng hưởng — bùng nổ!',
+      'Khẩu đội tổn thất nặng… dồn hết đạn vào loạt cuối!',
+      'Hạ nòng bắn thẳng trực diện luôn — khai hỏa!',
+      'Loạt pháo quyết tử thiêu rụi đội hình địch!',
+      'Còn một quả đạn trên giá phóng cũng phải bắn!',
+      'Toàn bộ hỏa lực dự trữ — dội xuống ngay!',
     ],
   },
 
   CLERIC: {
     HIGH: [
-      'Ánh sáng thánh thiện sẽ thanh tẩy ngươi!',
-      'Nguyện thần linh ban phước cho trận chiến!',
-      'Bóng tối không thể tồn tại trước ta!',
-      'Bằng đức tin, ta sẽ bảo vệ tất cả!',
-      'Thánh quang dẫn đường cho chính nghĩa!',
+      'Trạm quân y tiền phương luôn sẵn sàng tiếp ứng!',
+      'Giữ vững vị trí, băng gạc và huyết tương đã tới!',
+      'Chiếu sáng chiến trường — yểm trợ đồng đội!',
+      'Không một thương binh nào bị bỏ lại phía sau!',
+      'Vừa cứu thương vừa giữ vững tuyến hậu cần!',
     ],
     MID: [
-      'Xin ánh sáng tiếp thêm kiên định!',
-      'Dù bị thương, ta vẫn che chở đồng đội!',
-      'Lòng tin này chẳng thể bị khuất phục!',
-      'Thánh lực, hãy trừng phạt kẻ tà ác!',
-      'Ta phải trụ vững để cứu lấy mọi người!',
+      'Đạn pháo rơi sát lều quân y rồi, bình tĩnh nào!',
+      'Dù bị thương tôi vẫn sơ cứu được cho mọi người!',
+      'Tổ công binh cứu hộ đang giữ chặt phòng tuyến!',
+      'Bắn pháo hiệu chế áp để bảo vệ thương binh!',
+      'Cố lên anh em, tiếp viện y tế ngay sau lưng!',
     ],
     LOW: [
-      'Xin ban cho con sức mạnh lần cuối…',
-      'Ánh sáng nhỏ nhoi cũng xua tan màn đêm!',
-      'Ta sẽ không bỏ rơi đồng đội đâu!',
-      'Lời cầu nguyện cuối cùng… ứng nghiệm đi!',
-      'Đức tin sẽ giữ ta đứng vững!',
+      'Túi cứu thương đẫm bụi khói… vẫn còn chiến đấu được!',
+      'Bảo vệ lều thương binh tới hơi thở cuối cùng!',
+      'Tôi quyết không lùi khỏi vị trí cứu hộ này!',
+      'Dốc toàn lực cho đòn yểm trợ sinh tử!',
+      'Niềm tin chiến thắng sẽ giữ chúng ta đứng vững!',
     ],
   },
 
   DUELIST: {
     HIGH: [
-      'Chớp mắt là ngươi thua rồi!',
-      'Xem đường kiếm của ta có nhanh không!',
-      'Tư thế ngươi sơ hở quá nhiều!',
-      'Một nhát dứt điểm, không thừa động tác!',
-      'Kiếm ý đã thành — tiếp chiêu đi!',
+      'Tiểu liên đã lên đạn — tràn qua chiến hào!',
+      'Lựu đạn mở đường, xung kích cận chiến!',
+      'Tốc độ càn quét này địch không kịp lên quy lát!',
+      'Loạt đạn điểm xạ gọn ghẽ, dứt điểm mục tiêu!',
+      'Lính xung kích tiền phương — áp sát!',
     ],
     MID: [
-      'Khá lắm! Đáng để ta rút hết kiếm kỹ!',
-      'Máu đổ càng khiến lưỡi kiếm sắc hơn!',
-      'Thấy kẽ hở rồi — chém!',
-      'Nhanh hơn nữa… cắt đứt đòn của ngươi!',
-      'Cuộc đấu kiếm này bắt đầu thú vị rồi đấy!',
+      'Khá lắm! Thay băng đạn trống và quét tiếp!',
+      'Khói thuốc súng càng đặc, nhịp tiến càng nhanh!',
+      'Phát hiện hỏa điểm địch — vòng sang sườn tiêu diệt!',
+      'Vượt kẽm gai, nổ súng ngay trong tầm gần!',
+      'Cuộc đấu súng cận chiến giờ mới thật sự nóng lên!',
     ],
     LOW: [
-      'Tuyệt kiếm sinh tử! Tất cả vào nhát này!',
-      'Cận kề cái chết mới thấy rõ đường kiếm!',
-      'Một nhát kết liễu… không còn đường lui!',
-      'Kiếm khách thà gãy chứ không khuất phục!',
-      'Đừng chớp mắt — đây là chiêu cuối!',
+      'Hết băng đạn phụ rồi… tra lưỡi lê quyết chiến!',
+      'Giữa đống gạch vụn này chỉ một bên bước ra thôi!',
+      'Loạt đạn cuối cùng ở cự ly không thể trượt!',
+      'Chiến sĩ xung kích thà gục chứ không lùi một tấc!',
+      'Lao lên dứt điểm ngay bây giờ!',
     ],
   },
 
   BERSERKER: {
     HIGH: [
-      'Hahaha! Đỡ nổi nhát rìu này không?!',
-      'Nghiền nát hết bọn chúng đi!',
-      'Nhào hết vào đây! Ta chấp tất!',
-      'Một bổ chẻ đôi cả khiên lẫn giáp!',
-      'Chiến trường này thuộc về ta!',
+      'Đại liên hạng nặng khai hỏa — quét sạch bọn chúng!',
+      'Mở van bình áp suất… súng phun lửa thiêu rụi lô cốt!',
+      'Ống nổ công binh đã đặt — nổ tung công sự đi!',
+      'Hỏa lực áp chế cực đại, không tên nào ngóc đầu nổi!',
+      'Biển lửa tiền phương mở toang đường tiến quân!',
     ],
     MID: [
-      'Đau đấy! Càng đánh ta càng hăng!',
-      'Máu nóng sôi lên rồi — chịu chết đi!',
-      'Chỉ gãi ngứa thôi! Xem sức ta đây!',
-      'Rìu này chưa thấm máu đủ đâu!',
-      'Gầm lên và đập tan phòng tuyến!',
+      'Nòng súng đỏ rực rồi — thay nòng phụ bắn tiếp!',
+      'Mảnh văng chẳng ăn nhằm gì với giáp yếm công binh!',
+      'Dồn thêm áp lực lửa vào thẳng khe bắn boong-ke!',
+      'Càng đánh rát, hỏa lực hạng nặng càng áp đảo!',
+      'Giữ chặt chân súng đại liên — quét ngang đội hình địch!',
     ],
     LOW: [
-      'Chưa chết thì ta vẫn còn bổ được!',
-      'Cơn cuồng nộ cuối cùng — tan xác đi!',
-      'Ngươi muốn mạng ta? Lại đây mà lấy!',
-      'Đánh đổi hết! Nếm mùi điên cuồng này!',
-      'Gào thét đi! Ta sẽ kéo ngươi theo!',
+      'Bình nhiên liệu sắp cạn… xả trọn luồng lửa cuối!',
+      'Ôm khối bộc phá lao thẳng vào mục tiêu!',
+      'Muốn chiếm chốt này? Bước qua lưới lửa của ta đã!',
+      'Dây đạn cuối cùng — bắn không ngừng nghỉ!',
+      'Cho nổ tung toàn bộ cụm phòng ngự của chúng!',
     ],
   },
 
   FLIER: {
     HIGH: [
-      'Từ bầu trời cao, lao xuống kết liễu!',
-      'Đôi cánh này làm chủ cả chiến trường!',
-      'Ngước lên trời mà cầu nguyện đi!',
-      'Cơn lốc trên không — không lối thoát!',
-      'Bay cao và giáng đòn như thiên lôi!',
+      'Phi đội từ độ cao ba ngàn mét — bổ nhào cắt bom!',
+      'Bầu trời mặt trận thuộc quyền kiểm soát của chúng ta!',
+      'Tiếng còi bổ nhào vang lên rồi — ngắm chuẩn nóc tăng!',
+      'Khóa đuôi mục tiêu bằng loạt đại liên cánh!',
+      'Thả bom trúng hồng tâm rồi kéo cần lái vọt lên!',
     ],
     MID: [
-      'Gió ngược chẳng cản nổi đôi cánh ta!',
-      'Lượn vòng và đánh thẳng vào sườn địch!',
-      'Chưa rơi đâu! Còn bay là còn chiến!',
-      'Giữ thăng bằng… lao xuống lần nữa!',
-      'Không kích quyết định — tiến công!',
+      'Đạn cao xạ nổ quanh cánh, lượn vòng tránh flak ngay!',
+      'Động cơ vẫn gầm vang — quay lại oanh tạc đợt hai!',
+      'Vỏ nhôm thủng vài lỗ chẳng làm rơi nổi cánh chim này!',
+      'Hạ độ cao lướt sát ngọn cây, phóng rocket!',
+      'Không kích quyết định vào thẳng sườn địch!',
     ],
     LOW: [
-      'Cánh rách rồi… nhưng cú bổ này vẫn chí mạng!',
-      'Lao xuống lần cuối cùng từ đỉnh trời!',
-      'Bầu trời sẽ chứng giám đòn quyết tử này!',
-      'Không hạ cánh cho đến khi ngươi gục!',
-      'Bay xuyên bão tố — tất tay!',
+      'Động cơ bốc khói đen rồi… vẫn đủ lực cắt quả bom cuối!',
+      'Bổ nhào xuyên qua lưới lửa phòng không — tất tay!',
+      'Chưa thả hết cơ số bom thì chưa quay về sân bay!',
+      'Giữ chặt cần lái cho pha công kích sinh tử!',
+      'Từ tầng mây giông, giáng đòn sấm sét cuối cùng!',
     ],
   },
 
   ASSASSIN: {
     HIGH: [
-      'Trong bóng tối… ngươi đã mất mạng rồi.',
-      'Không tiếng động, không dấu vết.',
-      'Điểm yếu lộ rõ quá… kết thúc thôi.',
-      'Lưỡi dao lướt qua nhanh hơn hơi thở.',
-      'Đừng quay lại — đã quá muộn.',
+      'Đã cắt đứt đường dây điện thoại địch — nổ súng giảm thanh.',
+      'Đột nhập sau lưng chiến tuyến không một tiếng động.',
+      'Kho đạn địch lộ diện rồi… kích nổ hẹn giờ!',
+      'Đặc nhiệm đêm SAS: đánh nhanh, rút gọn.',
+      'Mục tiêu chỉ huy đã lọt vào tầm bắn cận chiến.',
     ],
     MID: [
-      'Bị phát hiện rồi à? Cũng chẳng sao!',
-      'Lẩn vào bóng đêm và tung đòn chí tử!',
-      'Ngươi phản xạ nhanh đấy… thử lần nữa xem!',
-      'Mục tiêu cứng đầu thật — dứt điểm thôi!',
-      'Một vết cắt hiểm hóc là đủ!',
+      'Pháo sáng địch vừa bắn lên? Lẩn vào bóng đổ nát ngay!',
+      'Đổi góc tiếp cận, hạ gục hỏa điểm canh gác!',
+      'Phản xạ nhanh đấy… nhưng mìn nam châm đã gài xong!',
+      ' Mật lệnh đã rõ — tiêu diệt gọn cụm vô tuyến này!',
+      'Một loạt Sten giảm thanh xuyên màn sương là đủ!',
     ],
     LOW: [
-      'Đường cùng rồi… lưỡi dao cuối cùng!',
-      'Hoặc ngươi ngã, hoặc bóng tối nuốt lấy ta!',
-      'Cược tất cả vào nhát đâm xuyên tim!',
-      'Ám ảnh cuối cùng trước khi tan biến!',
-      'Đừng coi thường kẻ bị dồn vào góc tối!',
+      'Bị bao vây giữa hậu phương địch… mở đường máu thôi!',
+      'Rút chốt lựu đạn khói và tung đòn chí tử!',
+      'Cược tất cả vào phát bắn xuyên khoang chỉ huy!',
+      'Ai Dám Thì Thắng — bóp cò không do dự!',
+      'Bóng ma đặc nhiệm không dễ bị bắt sống đâu!',
     ],
   },
 
   DARK_MAGE: {
     HIGH: [
-      'Bóng đêm cổ đại, nuốt chửng chúng đi!',
-      'Lời nguyền đã khắc — ngươi hết đường chạy!',
-      'Hư không đang gọi tên ngươi đấy…',
-      'Cảm nhận nỗi kinh hoàng của hắc thuật!',
-      'Màn đêm trùm xuống — tuyệt vọng đi!',
+      'Đại pháo đường sắt đã khóa góc bắn — chấn động mặt đất!',
+      'Đạn công thành hạng nặng xuyên thủng 3 mét bê tông!',
+      'Nghe tiếng rít xé gió của đạn pháo 210mm chưa?!',
+      'Không một boong-ke ngầm nào chịu nổi loạt pháo này!',
+      'Khai hỏa siêu trọng pháo — san phẳng cứ điểm!',
     ],
     MID: [
-      'Nỗi đau chỉ nuôi dưỡng hắc lực mạnh hơn!',
-      'Máu đổi cấm chú… hãy nếm trải đi!',
-      'Sức mạnh vực thẳm đang trào dâng!',
-      'Ngươi dám chống lại bóng tối sao?',
-      'Hắc ấn khai mở — gục ngã đi!',
+      ' Áp suất khóa nòng vẫn ổn định — nạp viên đạn tiếp theo!',
+      'Dội lửa chồng lên hố pháo cũ cho sập hẳn hầm ngầm!',
+      'Sóng xung kích đang nghiền nát ý chí phòng ngự địch!',
+      'Quay bệ pháo đường sắt sang mục tiêu kế tiếp!',
+      'Đạn nổ chậm xuyên sâu — bùng nổ đi!',
     ],
     LOW: [
-      'Hiến tế sinh lực… triệu hồi vực sâu!',
-      'Dù tan xương, lời nguyền vẫn kéo ngươi xuống!',
-      'Bóng tối vĩnh hằng — bùng nổ cùng ta!',
-      'Cấm thuật tuyệt diệt! Không ai thoát được!',
-      'Hư không… hãy nuốt trọn kẻ này!',
+      'Toa pháo hư hại nặng… kích hỏa viên đạn siêu trọng cuối!',
+      'Dù trận địa chìm trong khói lửa, đại bác vẫn gầm vang!',
+      'Cơn địa chấn pháo binh cuối cùng — tan tành đi!',
+      'Đặt ngòi nổ tức thì, bắn thẳng không cần hiệu chỉnh!',
+      'Sức công phá tối thượng kéo sập cả pháo đài địch!',
+    ],
+  },
+
+  NAVAL: {
+    HIGH: [
+      'Toàn bộ tháp hải pháo quay mạn — khai hỏa đồng loạt!',
+      'Ống phóng ngư lôi số 1 và số 2 — phóng!',
+      'Sóng Biển Bắc nâng bước Thiết giáp hạm Liên Minh!',
+      'Đạn xuyên giáp 380mm đang lao thẳng tới đài chỉ huy địch!',
+      'Sonar đã khóa mục tiêu mặt nước — tấn công!',
+    ],
+    MID: [
+      'Nước tràn khoang mũi đã được bơm chặn — bắn trả ngay!',
+      'Cơ động cắt ngang chữ T trước mũi hạm đội địch!',
+      'Kính tiềm vọng lên cao… phóng loạt ngư lôi phản công!',
+      'Lưới phòng không trên boong tàu vẫn giữ vững đội hình!',
+      'Hải pháo chính nạp đạn xong — nã thẳng vào sườn chúng!',
+    ],
+    LOW: [
+      'Boong tàu cháy rực nhưng tháp pháo số 1 vẫn còn đạn!',
+      'Chiến hạm thà chìm trong vinh quang chứ không hạ cờ!',
+      'Mở hết tốc lực lao thẳng phóng quả ngư lôi cuối cùng!',
+      'Đài chỉ huy ngập khói… khai hỏa loạt đạn quyết tử!',
+      'Đại dương sẽ khắc tên cú bắn chí mạng này!',
     ],
   },
 
   ENEMY_BOSS: {
     HIGH: [
-      'Lũ sâu kiến dám thách thức ta sao?!',
-      'Quỳ xuống trước sức mạnh tuyệt đối!',
-      'Nơi đây sẽ là mồ chôn của các ngươi!',
-      'Để ta tự tay nghiền nát đội quân này!',
-      'Thật nực cười! Hãy nếm mùi tuyệt vọng!',
+      'Đội quân Liên Minh kia định cản bước gọng kìm thép của ta sao?!',
+      'Toàn cụm phòng tuyến nghe lệnh — nghiền nát chúng!',
+      'Cứ điểm này đã biến thành pháo đài bất khả xâm phạm!',
+      'Để ta cho các ngươi nếm mùi hỏa lực chủ lực của Đế Chế!',
+      'Tọa độ đã khóa chặt — không một tên nào thoát khỏi đây!',
     ],
     MID: [
-      'Hừ… ngươi làm ta đổ máu được rồi đấy!',
-      'Khá lắm, nhưng trò chơi kết thúc tại đây!',
-      'Đừng tưởng vài vết xước là thắng được ta!',
-      'Ta sẽ cho ngươi thấy thực lực thật sự!',
-      'Lũ ngoan cố! Chết hết đi cho khuất mắt!',
+      'Hừ… mũi đột kích của các ngươi khá táo bạo đấy!',
+      'Đưa lực lượng thiết giáp dự bị lên phản kích ngay lập tức!',
+      'Vài loạt đạn pháo đó chưa làm lung lay nổi sở chỉ huy của ta!',
+      'Ta sẽ đích thân bẻ gãy đợt tiến công này!',
+      'Bắn cấp tập không ngừng! Giữ chặt tuyến phòng thủ!',
     ],
     LOW: [
-      'Không thể nào… ta không thể bại ở đây!',
-      'Grrr! Kẻ nào dám đẩy ta đến bước này?!',
-      'Dù gục ngã, ta cũng kéo ngươi xuống địa ngục!',
-      'Toàn lực hủy diệt — biến mất đi!',
-      'Ta là bất bại… cút khỏi tầm mắt ta!',
+      'Không thể nào… phòng tuyến thép của ta đang sụp đổ sao?!',
+      'Điện báo về Tổng hành dinh! Ta quyết tử thủ tới viên đạn cuối!',
+      'Dù boong-ke này sập xuống, ta cũng kéo các ngươi chôn cùng!',
+      'Khai hỏa toàn bộ kho đạn dự trữ — hủy diệt tất cả!',
+      'Ta là Thống Chế mặt trận… không bao giờ đầu hàng!',
     ],
   },
 
   ENEMY_SOLDIER: {
     HIGH: [
-      'Giữ vững hàng ngũ! Hạ gục chúng!',
-      'Lệnh đã ban — không tha một tên nào!',
-      'Xông lên! Đừng để chúng tiến thêm!',
-      'Ngươi sẽ không qua được ải này đâu!',
-      'Nếm thử vũ khí của quân đoàn ta!',
+      'Giữ chặt chiến hào! Khai hỏa súng máy chặn đứng chúng!',
+      'Mệnh lệnh từ Sở chỉ huy — không lùi một bước!',
+      'Đã thấy quân Liên Minh trong tầm bắn — nổ súng!',
+      'Các ngươi không vượt qua nổi bãi mìn và lô cốt này đâu!',
+      'Nạp đạn pháo nhanh — khóa chặt đường tiến của địch!',
     ],
     MID: [
-      'Khốn kiếp… bọn chúng mạnh hơn ta tưởng!',
-      'Cầm cự lên! Đánh trả ngay!',
-      'Vết thương này chưa hạ được ta đâu!',
-      'Không được lùi! Quyết chiến tới cùng!',
-      'Đỡ lấy đòn phản công này!',
+      'Hỏa lực đối phương mạnh quá… gọi chi viện ngay!',
+      'Bám trụ công sự bao cát! Bắn trả liên tục!',
+      'Vết thương nhẹ thôi, vẫn giữ được cò súng!',
+      'Không được rút lui! Chặn mũi thiết giáp của chúng lại!',
+      'Ném lựu đạn phản kích ngay bây giờ!',
     ],
     LOW: [
-      'Chết tiệt… ta sắp không trụ nổi rồi!',
-      'Không thể bỏ mạng dễ dàng thế được!',
-      'Một đòn liều mạng cuối cùng!',
-      'Tiếp viện đâu?! Ta vẫn sẽ chống cự!',
-      'Dù gục ngã cũng phải kéo ngươi bị thương!',
+      'Công sự vỡ toang rồi… bắn hết băng đạn cuối cùng!',
+      'Tuyến sau đâu rồi?! Ta vẫn sẽ chống trả tới cùng!',
+      'Một loạt đạn liều chết trước khi ngã xuống!',
+      'Khói lửa che kín mắt rồi… cứ nhắm phía trước mà bắn!',
+      'Quyết kéo theo ít nhất một mục tiêu của chúng!',
     ],
   },
 };
 
-/**
- * Selects a randomized battle quote tailored to the unit's class archetype and live HP percentage.
- * Supports deterministic RNG injection for unit testing and anti-repeat filtering across strikes.
- */
 export function pickBattleQuote(
   unit: Pick<Unit, 'classId' | 'faction' | 'isBoss' | 'isLord' | 'moveType' | 'weapon'>,
   currentHp: number,

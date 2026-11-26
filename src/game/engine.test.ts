@@ -54,9 +54,11 @@ import {
   ARMOR_TEMPLATES,
   buildPartyUnitsForAct,
   buildUnlockedRosterUnits,
+  canUnitStandOnTerrain,
   CLASS_COUNT,
   CLASS_LINEAGES,
   CLASS_META,
+  isNavalPassableTerrain,
   computeArmorInstanceBonuses,
   computeWeaponForgeBonuses,
   createEquipmentInstance,
@@ -108,6 +110,7 @@ import {
   getWeatherAnimationProfile,
   stepImpactParticles,
   stepWeatherParticle,
+  TILE_PX,
 } from './pixelRenderer';
 import { createLevelUpBurst, stepLevelUpBurst } from './levelUpParticles';
 import {
@@ -119,6 +122,7 @@ import {
   SPRITE_H,
   SPRITE_W,
 } from './pixelSprites';
+import { drawRealisticPortraitCanvas, drawRealisticUnitCanvas } from './realisticMilitaryArt';
 import { createFreshSave, mergeUnitsIntoSavedRoster } from './storage';
 import { CAMP_SPARRING_COST_GOLD, CAMP_SPARRING_EXP_GAIN, getHeroCampDialogue } from './campData';
 import type { TerrainType, Unit } from './types';
@@ -271,29 +275,40 @@ test('Enemy AI policies behave distinctly (BOSS holds throne, KITER attacks at r
 });
 
 test('Win and defeat conditions evaluate ROUT, DEFEAT_BOSS, SEIZE, SURVIVE, and Lord loss', () => {
-  const map1 = CAMPAIGN_MAPS[0]; // ROUT
-  const map4 = CAMPAIGN_MAPS[3]; // SEIZE
-  const map6 = CAMPAIGN_MAPS[5]; // SURVIVE
-  const map12 = CAMPAIGN_MAPS[11]; // DEFEAT_BOSS
+  const routMap = CAMPAIGN_MAPS.find((m) => m.objective === 'ROUT')!;
+  const seizeMap = CAMPAIGN_MAPS.find((m) => m.objective === 'SEIZE')!;
+  const surviveMap = CAMPAIGN_MAPS.find((m) => m.objective === 'SURVIVE')!;
+  const bossMap = CAMPAIGN_MAPS.find((m) => m.objective === 'DEFEAT_BOSS')!;
 
   const lord = makeTestUnit({ id: 'lord', isLord: true, hp: 20 });
   const boss = makeTestUnit({ id: 'boss', faction: 'ENEMY', isLord: false, isBoss: true, hp: 20 });
 
-  assert.equal(checkBattleOutcome([lord], map1, 1, false).status, 'VICTORY');
-  assert.equal(checkBattleOutcome([{ ...lord, hp: 0 }, boss], map1, 1, false).status, 'DEFEAT');
-  assert.equal(checkBattleOutcome([lord, boss], map4, 2, true).status, 'VICTORY');
-  assert.equal(checkBattleOutcome([lord, boss], map6, 7, false).status, 'VICTORY');
-  assert.equal(checkBattleOutcome([lord, { ...boss, hp: 0 }], map12, 3, false).status, 'VICTORY');
+  assert.equal(checkBattleOutcome([lord], routMap, 1, false).status, 'VICTORY');
+  assert.equal(checkBattleOutcome([{ ...lord, hp: 0 }, boss], routMap, 1, false).status, 'DEFEAT');
+  assert.equal(checkBattleOutcome([lord, boss], seizeMap, 2, true).status, 'VICTORY');
+  assert.equal(
+    checkBattleOutcome([lord, boss], surviveMap, (surviveMap.surviveTurns ?? 6) + 1, false).status,
+    'VICTORY'
+  );
+  assert.equal(checkBattleOutcome([lord, { ...boss, hp: 0 }], bossMap, 3, false).status, 'VICTORY');
 });
 
-test('All 120 campaign maps generate cleanly with unique titles, story continuity, and 100% foot connectivity', () => {
-  assert.equal(CAMPAIGN_ACTS.length, 10);
-  assert.equal(CAMPAIGN_MAPS.length, 120);
+test('All 200 historical WWI & WWII campaign maps generate cleanly with unique titles, story continuity, and 100% tactical connectivity', () => {
+  assert.equal(CAMPAIGN_ACTS.length, 16);
+  assert.equal(CAMPAIGN_MAPS.length, 200);
+  assert.equal(CAMPAIGN_MAPS[0].era, 'WW1');
+  assert.ok(CAMPAIGN_MAPS[0].title.includes('Liège'), 'Map 1 must open WWI with Trận Liège');
+  assert.equal(CAMPAIGN_MAPS[99].era, 'WW1');
+  assert.ok(CAMPAIGN_MAPS[99].title.includes('Sambre'), 'Map 100 must close WWI with Trận Sambre lần thứ hai');
+  assert.equal(CAMPAIGN_MAPS[100].era, 'WW2');
+  assert.ok(CAMPAIGN_MAPS[100].title.includes('Thượng Hải'), 'Map 101 must open WWII with Trận Thượng Hải');
+  assert.equal(CAMPAIGN_MAPS[199].era, 'WW2');
+  assert.ok(CAMPAIGN_MAPS[199].title.includes('Mãn Châu'), 'Map 200 must close WWII with Chiến dịch Mãn Châu');
 
   const seenTitles = new Set<string>();
   const roster = createInitialRoster();
 
-  for (let id = 1; id <= 120; id++) {
+  for (let id = 1; id <= 200; id++) {
     const map = generateMap(id);
     assert.equal(map.meta.id, id);
     assert.ok(!seenTitles.has(map.meta.title), `Duplicate map title on map ${id}: ${map.meta.title}`);
@@ -339,9 +354,18 @@ test('All 120 campaign maps generate cleanly with unique titles, story continuit
       `Map ${id} throne not reachable from player spawn`
     );
     for (const enemy of map.enemies) {
+      const directlyReachable = visited.has(`${enemy.x},${enemy.y}`);
+      const adjacentShoreReachable =
+        enemy.moveType === 'NAVAL' &&
+        [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ].some(([dx, dy]) => visited.has(`${enemy.x + dx},${enemy.y + dy}`));
       assert.ok(
-        visited.has(`${enemy.x},${enemy.y}`),
-        `Map ${id} enemy ${enemy.id} at (${enemy.x},${enemy.y}) not reachable`
+        directlyReachable || adjacentShoreReachable,
+        `Map ${id} enemy ${enemy.id} (${enemy.moveType}) at (${enemy.x},${enemy.y}) not reachable`
       );
     }
   }
@@ -576,8 +600,8 @@ test('Expanded Weapons & Items catalog (4x-5x scale), distinct In-Map vs Out-of-
   assert.ok(trained.updatedUnit.level >= 5, 'Grandmaster Tome (+500 EXP) should grant multiple level-ups');
 });
 
-test('Every map 1..120 has causal story continuity links AND reachable In-Map Armory & Vendor tiles', () => {
-  for (let id = 1; id <= 120; id++) {
+test('Every map 1..200 has causal story continuity links AND reachable In-Map Armory & Vendor tiles', () => {
+  for (let id = 1; id <= 200; id++) {
     const map = generateMap(id);
     assert.ok(map.meta.chapterCode.length > 0, `Map ${id} missing chapterCode`);
     assert.ok(map.meta.storyArcBeat.length > 0, `Map ${id} missing storyArcBeat`);
@@ -596,21 +620,25 @@ test('Every map 1..120 has causal story continuity links AND reachable In-Map Ar
       `Map ${id} missing SHOP_VENDOR tile`
     );
 
-    // Check continuity: Map N>1 references previous map title or Act bridge
+    // Check continuity: Map N>1 references previous map title, chapter code, or WWI->WWII grand era bridge
     if (id > 1) {
       const prev = CAMPAIGN_MAPS[id - 2];
       assert.ok(
         map.meta.previousMapLink.includes(prev.title) ||
-          map.meta.previousMapLink.includes(prev.chapterCode),
+          map.meta.previousMapLink.includes(prev.chapterCode) ||
+          (id === 101 && map.meta.previousMapLink.includes('Thế Chiến I')),
         `Map ${id} previousMapLink should reference Map ${id - 1}`
       );
     }
   }
 });
 
-test('4-Tier Visual Evolution silhouettes grow unmistakably grander from Bậc I to Bậc IV Thần Thoại across all 30 lineages', () => {
-  assert.equal(SPRITE_W, 64);
-  assert.equal(SPRITE_H, 72);
+test('4-Tier Visual Evolution silhouettes grow unmistakably grander from Bậc I to Bậc IV Thần Thoại across all 30 lineages at 192x192 base block scale', () => {
+  assert.equal(TILE_PX, 192);
+  assert.equal(SPRITE_W, 192);
+  assert.equal(SPRITE_H, 192);
+  assert.equal(PORTRAIT_W, 192);
+  assert.equal(PORTRAIT_H, 192);
 
   assert.equal(CLASS_LINEAGES.length, 30);
   for (const lin of CLASS_LINEAGES) {
@@ -648,8 +676,8 @@ test('4-Tier Visual Evolution silhouettes grow unmistakably grander from Bậc I
       `${baseClassId} T4 (${metrics[3].filledPixels}) should be grander than T3 (${metrics[2].filledPixels})`
     );
     assert.ok(
-      metrics[3].bboxWidth >= 46,
-      `${baseClassId} T4 Mythic wings/weapon span (${metrics[3].bboxWidth}) should be >= 46px wide`
+      metrics[3].bboxWidth >= 132,
+      `${baseClassId} T4 Mythic wings/weapon span (${metrics[3].bboxWidth}) should be >= 132px wide on 192x192 grid`
     );
   }
 });
@@ -1109,7 +1137,7 @@ test('pickBattleQuote selects randomized class/HP%-specific quotes and avoids im
   assert.notEqual(qNoRepeat.text, q0.text);
 });
 
-test('HD-2D Enemy class palettes, twilight acted shading, and 48x48 RPG bust portraits are distinct and rich', () => {
+test('HD-2D Enemy class palettes, twilight acted shading, and 192x192 RPG bust portraits are distinct and rich', () => {
   // Enemy archetypes get distinct armor hues rather than identical monochrome red cylinders
   const enemySoldierPal = getPaletteForUnit('SOLDIER', 'imperial_soldier', 'ENEMY', false, false);
   const enemyMagePal = getPaletteForUnit('DARK_MAGE', 'imperial_mage', 'ENEMY', false, false);
@@ -1152,7 +1180,7 @@ test('HD-2D Enemy class palettes, twilight acted shading, and 48x48 RPG bust por
   }
 });
 
-test('120 Campaign maps span Medium, Large, and Colossal dimensions up to 36x22 with 8 non-identical AttackAxes', () => {
+test('200 WWI & WWII Campaign maps span Medium, Large, and Colossal dimensions up to 36x22 with 8 non-identical AttackAxes', () => {
   const scaleBuckets = { 'Cỡ Vừa': 0, 'Cỡ Lớn': 0, 'Đại Chiến Trường': 0 };
   const axesSeen = new Set<string>();
   let maxArea = 0;
@@ -1170,8 +1198,8 @@ test('120 Campaign maps span Medium, Large, and Colossal dimensions up to 36x22 
   }
 
   assert.ok(scaleBuckets['Cỡ Vừa'] >= 15, `Expected >=15 Medium maps, got ${scaleBuckets['Cỡ Vừa']}`);
-  assert.ok(scaleBuckets['Cỡ Lớn'] >= 35, `Expected >=35 Large maps, got ${scaleBuckets['Cỡ Lớn']}`);
-  assert.ok(scaleBuckets['Đại Chiến Trường'] >= 35, `Expected >=35 Colossal maps, got ${scaleBuckets['Đại Chiến Trường']}`);
+  assert.ok(scaleBuckets['Cỡ Lớn'] >= 50, `Expected >=50 Large maps, got ${scaleBuckets['Cỡ Lớn']}`);
+  assert.ok(scaleBuckets['Đại Chiến Trường'] >= 60, `Expected >=60 Colossal maps, got ${scaleBuckets['Đại Chiến Trường']}`);
   assert.equal(axesSeen.size, 8, 'All 8 distinct AttackAxis geometries must appear across campaign');
   assert.equal(maxArea, 36 * 22, 'Final Colossal maps reach 36x22 (792 tiles)');
 
@@ -1181,8 +1209,8 @@ test('120 Campaign maps span Medium, Large, and Colossal dimensions up to 36x22 
   );
   assert.equal(new Set(act1Shapes).size, 6, 'First 6 chapters of Act 1 must each have distinct shape/axis');
 
-  // Verify generated Colossal & North-South maps have >=12 spawns, 1-2 range Bosses, and Elite/Healer enemies
-  for (const sampleId of [1, 4, 6, 10, 12, 60, 120]) {
+  // Verify generated Colossal, Naval & WWII maps have >=12 spawns, 1-2 range Bosses, and Elite/Healer enemies
+  for (const sampleId of [1, 4, 6, 10, 12, 55, 100, 101, 139, 184, 200]) {
     const gen = generateMap(sampleId);
     assert.equal(gen.width, gen.meta.mapWidth);
     assert.equal(gen.height, gen.meta.mapHeight);
@@ -1198,16 +1226,18 @@ test('120 Campaign maps span Medium, Large, and Colossal dimensions up to 36x22 
   }
 });
 
-test('30-Hero Unlocked Pool, Custom Squad Selection, Direction-Aware Formations & Tile Swapping', () => {
+test('30-Hero Unlocked Pool across 16 Acts (WWI -> WWII), Custom Squad Selection, Direction-Aware Formations & Tile Swapping', () => {
   const roster = createInitialRoster();
   const act1Unlocked = buildUnlockedRosterUnits(1, roster, 1);
   const act8Unlocked = buildUnlockedRosterUnits(8, roster, 24);
+  const act16Unlocked = buildUnlockedRosterUnits(16, roster, 40);
   assert.equal(act1Unlocked.length, 8, 'Act 1 unlocks 8 heroes (6 active + 2 tactical reserves)');
-  assert.equal(act8Unlocked.length, 30, 'All 30 playable heroes unlock by Act 8');
+  assert.ok(act8Unlocked.length >= 20, 'By end of WWI (Act 8) at least 20 combined-arms heroes are unlocked');
+  assert.equal(act16Unlocked.length, 30, 'All 30 playable heroes unlock across WWI & WWII (by Act 16)');
 
   // Custom preferredSquadIds overrides default squad while keeping Kaelen (isLord) mandatory
-  const pickedLateIds = act8Unlocked.slice(-7).map((u) => u.templateId);
-  const customSquad = buildPartyUnitsForAct(8, roster, 24, [], {}, 8, pickedLateIds);
+  const pickedLateIds = act16Unlocked.slice(-7).map((u) => u.templateId);
+  const customSquad = buildPartyUnitsForAct(16, roster, 40, [], {}, 8, pickedLateIds);
   assert.equal(customSquad.length, 8);
   assert.equal(customSquad[0].templateId, 'kaelen', 'Lord Kaelen stays mandatory in slot 0');
   assert.ok(customSquad.some((u) => u.templateId === pickedLateIds[0]));
@@ -1511,8 +1541,8 @@ test('Carry Limit (6/6 Excludes Worn Armor & Equipped Weapon), Dedicated Convoy 
   assert.equal(MAX_BATTLE_LOOT_DROP_CHANCE, 0.001);
 
   // Verify fresh campaign starter roster excludes equipped weapon & worn Mũ/Giáp/Giày:
-  // Kaelen wears 5 armor pieces + wields iron_sword, and carries 2 spare swords + 2 potions = 4/6!
-  // Soren wields fire + carries 3 spare tomes + 2 potions = 5/6!
+  // Kaelen wears 5 armor pieces + wields primary rifle, and carries 2 spare weapons + 1 Infantry Ammo Supply + 2 potions = 5/6!
+  // Soren wields primary field cannon + carries 3 spare artillery rounds + 1 Artillery Supply + 2 potions = 6/6 (capped safely at <=6)!
   const freshSave = createFreshSave();
   const starterUnits = buildUnlockedRosterUnits(
     1,
@@ -1525,8 +1555,19 @@ test('Carry Limit (6/6 Excludes Worn Armor & Equipped Weapon), Dedicated Convoy 
   const starterSoren = starterUnits.find((u) => u.templateId === 'soren')!;
   assert.equal(Object.keys(starterKaelen.equipment ?? {}).length, 5, 'Kaelen wears all 5 armor slots');
   assert.equal(getSpareWeaponCount(starterKaelen), 2);
-  assert.equal(getUnitCarryCount(starterKaelen), 4, 'Kaelen 5 worn armor + 1 equipped sword = 0 bag slots; 2 spare swords + 2 potions = 4/6');
-  assert.equal(getUnitCarryCount(starterSoren), 5, 'Soren 1 equipped tome = 0 bag slots; 3 spare tomes + 2 potions = 5/6');
+  assert.ok(
+    (starterKaelen.carriedItems?.length ?? 0) >= 1,
+    'Starter infantry commander carries domain-specific military supply item'
+  );
+  assert.equal(
+    getUnitCarryCount(starterKaelen),
+    5,
+    'Kaelen 5 worn armor + 1 equipped rifle = 0 bag slots; 2 spare weapons + 1 domain supply + 2 potions = 5/6'
+  );
+  assert.ok(
+    getUnitCarryCount(starterSoren) <= MAX_UNIT_CARRY_SLOTS && getUnitCarryCount(starterSoren) >= 5,
+    'Soren stays within 6/6 carry limit with artillery munitions & domain supplies'
+  );
 
   const wornHelmet = createEquipmentInstance('iron_helm', { uid: 'worn_helm_1' });
   const wornArmor = createEquipmentInstance('valoria_mail', { uid: 'worn_armor_1' });
@@ -1699,5 +1740,275 @@ test('Carry Limit (6/6 Excludes Worn Armor & Equipped Weapon), Dedicated Convoy 
   }
 });
 
+test('NAVAL units strictly traverse WATER and BRIDGE only, never dry land', () => {
+  assert.equal(TERRAIN_DATA.WATER.moveCost.NAVAL, 1);
+  assert.equal(TERRAIN_DATA.BRIDGE.moveCost.NAVAL, 2);
+  assert.equal(isNavalPassableTerrain('WATER'), true);
+  assert.equal(isNavalPassableTerrain('BRIDGE'), true);
 
+  const dryTerrains: TerrainType[] = [
+    'PLAIN',
+    'ROAD',
+    'FOREST',
+    'FORT',
+    'MOUNTAIN',
+    'WALL',
+    'SAND',
+    'SNOW',
+    'LAVA',
+    'THRONE',
+    'SHOP_ARMORY',
+    'SHOP_VENDOR',
+  ];
+  for (const t of dryTerrains) {
+    assert.equal(TERRAIN_DATA[t].moveCost.NAVAL, 99, `NAVAL moveCost on ${t} must be 99 (impassable)`);
+    assert.equal(isNavalPassableTerrain(t), false, `${t} must not be naval-passable`);
+    assert.equal(canUnitStandOnTerrain('NAVAL', t), false, `NAVAL must never stand on ${t}`);
+  }
 
+  const map1 = generateMap(1);
+  const navalSpawns = map1.playerSpawns.filter((sp) => isNavalPassableTerrain(map1.grid[sp.y][sp.x]));
+  assert.ok(navalSpawns.length >= 1, 'Map 1 (Trận Liège - Meuse River) provides water naval berths');
+
+  const warship = makeTestUnit({
+    id: 'test_warship',
+    name: 'Drake',
+    classId: 'PIRATE',
+    moveType: 'NAVAL',
+    x: navalSpawns[0].x,
+    y: navalSpawns[0].y,
+    stats: { maxHp: 34, str: 12, mag: 0, skl: 10, spd: 8, lck: 7, def: 11, res: 6, mov: 6 },
+  });
+
+  const reachable = getReachableTiles(warship, map1.grid, [warship]);
+  assert.ok(reachable.size >= 2, 'Warship can navigate along connected river channel');
+  for (const key of reachable.keys()) {
+    const [rx, ry] = key.split(',').map(Number);
+    const tile = map1.grid[ry][rx];
+    assert.equal(
+      isNavalPassableTerrain(tile),
+      true,
+      `Warship reachable tile (${rx},${ry}) has terrain ${tile} which must be WATER or BRIDGE`
+    );
+  }
+});
+
+test('All 200 historical battles enforce strict water-only NAVAL placement & swap rules', () => {
+  for (let mapId = 1; mapId <= 200; mapId++) {
+    const map = generateMap(mapId);
+    for (const enemy of map.enemies) {
+      const tile = map.grid[enemy.y][enemy.x];
+      if (enemy.moveType === 'NAVAL') {
+        assert.equal(
+          isNavalPassableTerrain(tile),
+          true,
+          `Map ${mapId} (${map.meta.title}): Enemy NAVAL unit ${enemy.name} (${enemy.classId}) spawned on dry land ${tile} at (${enemy.x},${enemy.y})`
+        );
+      } else if (enemy.moveType !== 'FLYING') {
+        assert.ok(
+          TERRAIN_DATA[tile].moveCost[enemy.moveType] < 99,
+          `Map ${mapId} (${map.meta.title}): Enemy ${enemy.moveType} unit spawned on impassable ${tile} at (${enemy.x},${enemy.y})`
+        );
+      }
+    }
+
+    const navalBerthCount = map.playerSpawns.filter((sp) =>
+      isNavalPassableTerrain(map.grid[sp.y][sp.x])
+    ).length;
+    const party = buildPartyUnitsForAct(
+      map.meta.actNumber,
+      [],
+      map.meta.recommendedLevel,
+      [],
+      {},
+      8,
+      undefined,
+      navalBerthCount > 0
+    );
+    const placed = computeFormationPlacement(party, map.playerSpawns, 'BALANCED', map.throneCoord, map.grid);
+
+    for (const u of placed) {
+      const tile = map.grid[u.y][u.x];
+      if (u.moveType === 'NAVAL') {
+        assert.equal(
+          isNavalPassableTerrain(tile),
+          true,
+          `Map ${mapId}: Player NAVAL unit ${u.name} deployed on dry land ${tile} at (${u.x},${u.y})`
+        );
+      } else if (u.moveType !== 'FLYING') {
+        assert.ok(
+          TERRAIN_DATA[tile].moveCost[u.moveType] < 99,
+          `Map ${mapId}: Player ${u.moveType} unit ${u.name} deployed on impassable ${tile} at (${u.x},${u.y})`
+        );
+      }
+    }
+
+    if (navalBerthCount === 0) {
+      assert.equal(
+        placed.some((u) => u.moveType === 'NAVAL'),
+        false,
+        `Map ${mapId}: Landlocked map must not deploy NAVAL units`
+      );
+    }
+  }
+
+  // Test deployment swap rejection between NAVAL ship on WATER and FOOT soldier on dry land
+  const map1 = generateMap(1);
+  const party1 = computeFormationPlacement(
+    buildPartyUnitsForAct(1, [], 1, [], {}, 8, undefined, true),
+    map1.playerSpawns,
+    'BALANCED',
+    map1.throneCoord,
+    map1.grid
+  );
+  const ship = party1.find((u) => u.moveType === 'NAVAL');
+  const foot = party1.find((u) => u.moveType === 'FOOT' && map1.grid[u.y][u.x] !== 'BRIDGE');
+  assert.ok(ship && foot, 'Map 1 deploys both a NAVAL warship and a FOOT infantry unit');
+
+  const blockedSwap = swapOrMoveDeploymentUnit(
+    party1,
+    { x: ship.x, y: ship.y },
+    { x: foot.x, y: foot.y },
+    map1.playerSpawns,
+    map1.grid
+  );
+  assert.equal(blockedSwap.changed, false, 'Swap between WATER ship and dry-land FOOT unit must be rejected');
+  const afterShip = blockedSwap.units.find((u) => u.id === ship.id)!;
+  assert.equal(afterShip.x, ship.x, 'NAVAL unit must not swap onto dry-land deployment spawn');
+  assert.equal(afterShip.y, ship.y, 'NAVAL unit must remain on its WATER berth');
+});
+
+test('Map 1 (Trận Liège) accurately depicts green Meuse River valley, woodland, bridges, and forts', () => {
+  const map1 = generateMap(1);
+  assert.equal(map1.meta.biome, 'VALORIA_PLAINS');
+  let plainCount = 0;
+  let forestCount = 0;
+  let waterCount = 0;
+  let bridgeCount = 0;
+  let fortCount = 0;
+  for (let y = 0; y < map1.height; y++) {
+    for (let x = 0; x < map1.width; x++) {
+      const t = map1.grid[y][x];
+      if (t === 'PLAIN') plainCount++;
+      if (t === 'FOREST') forestCount++;
+      if (t === 'WATER') waterCount++;
+      if (t === 'BRIDGE') bridgeCount++;
+      if (t === 'FORT') fortCount++;
+    }
+  }
+  assert.ok(plainCount >= 40, `Expected green valley plains on Liège, got ${plainCount}`);
+  assert.ok(forestCount >= 8, `Expected woodland groves on Liège, got ${forestCount}`);
+  assert.ok(waterCount >= 18, `Expected Meuse River water channel on Liège, got ${waterCount}`);
+  assert.ok(bridgeCount >= 2, `Expected Meuse River bridges on Liège, got ${bridgeCount}`);
+  assert.ok(fortCount >= 5, `Expected Belgian concrete ring of forts on Liège, got ${fortCount}`);
+});
+
+test('All 30 4-tier CLASS_LINEAGES use distinct standardized modern Vietnamese military terminology', () => {
+  const seenNames = new Set<string>();
+  const bannedTerms = ['Pháp Sư', 'Hiệp Sĩ Rồng', 'Kỵ Sĩ Thánh', 'Cung Thủ', 'Kiếm Sĩ'];
+  assert.equal(CLASS_LINEAGES.length, 30);
+
+  for (const lin of CLASS_LINEAGES) {
+    assert.equal(lin.tiers.length, 4);
+    for (const tierEntry of lin.tiers) {
+      const meta = CLASS_META[tierEntry.id];
+      assert.ok(meta && meta.name.trim().length >= 4, `Missing Vietnamese name for ${tierEntry.id}`);
+      for (const banned of bannedTerms) {
+        assert.equal(
+          meta.name.includes(banned),
+          false,
+          `Class ${tierEntry.id} (${meta.name}) still contains archaic fantasy term "${banned}"`
+        );
+      }
+      assert.equal(
+        seenNames.has(meta.name),
+        false,
+        `Duplicate Vietnamese military class name "${meta.name}" on ${tierEntry.id}`
+      );
+      seenNames.add(meta.name);
+    }
+  }
+  assert.equal(seenNames.size, 120);
+});
+
+test('Realistic 192x192 Canvas2D military renderer draws multi-layered shaded silhouettes across all 120 classes and portraits', () => {
+  let fillOps = 0;
+  let strokeOps = 0;
+  const mockGrad = { addColorStop() {} };
+  const mockCtx = new Proxy(
+    {
+      fillStyle: '#000',
+      strokeStyle: '#000',
+      lineWidth: 1,
+      lineJoin: 'round',
+      lineCap: 'round',
+      globalAlpha: 1,
+      fill() {
+        fillOps++;
+      },
+      stroke() {
+        strokeOps++;
+      },
+      fillRect() {
+        fillOps++;
+      },
+      strokeRect() {
+        strokeOps++;
+      },
+      createLinearGradient() {
+        return mockGrad;
+      },
+      createRadialGradient() {
+        return mockGrad;
+      },
+    },
+    {
+      get(target, prop) {
+        if (prop in target) return (target as Record<string | symbol, unknown>)[prop];
+        return () => {};
+      },
+      set(target, prop, value) {
+        (target as Record<string | symbol, unknown>)[prop] = value;
+        return true;
+      },
+    }
+  ) as unknown as CanvasRenderingContext2D;
+
+  for (const lin of CLASS_LINEAGES) {
+    for (let idx = 0; idx < lin.tiers.length; idx++) {
+      const tierEntry = lin.tiers[idx];
+      const tier = (idx + 1) as 1 | 2 | 3 | 4;
+      for (const faction of ['PLAYER', 'ENEMY'] as const) {
+        fillOps = 0;
+        strokeOps = 0;
+        const meta = CLASS_META[tierEntry.id];
+        const u = makeTestUnit({
+          classId: tierEntry.id,
+          tier,
+          promoted: tier >= 2,
+          faction,
+          moveType: meta.moveType,
+        });
+        const pal = getPaletteForUnit(u.classId, u.templateId, faction, false, false);
+        drawRealisticUnitCanvas(mockCtx, u, pal, 0, 'idle');
+        drawRealisticUnitCanvas(mockCtx, u, pal, 2, 'walk');
+        assert.ok(
+          fillOps >= 18 && strokeOps >= 8,
+          `Expected rich multi-layered Canvas2D geometry for ${tierEntry.id} (${faction}), got fill=${fillOps}, stroke=${strokeOps}`
+        );
+      }
+    }
+  }
+
+  for (const sampleClass of ['LORD', 'PALADIN', 'SAGE', 'FALCON_KNIGHT', 'DREAD_CAPTAIN'] as const) {
+    fillOps = 0;
+    strokeOps = 0;
+    const u = makeTestUnit({ classId: sampleClass, tier: 2, promoted: true });
+    const pal = getPaletteForUnit(u.classId, u.templateId, 'PLAYER', false, false);
+    drawRealisticPortraitCanvas(mockCtx, u, pal);
+    assert.ok(
+      fillOps >= 12 && strokeOps >= 6,
+      `Expected rich 192x192 portrait geometry for ${sampleClass}, got fill=${fillOps}, stroke=${strokeOps}`
+    );
+  }
+});

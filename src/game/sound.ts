@@ -87,50 +87,81 @@ class TacticalSoundEngine {
     osc.stop(now + duration + 0.02);
   }
 
+  private playNoiseBurst(duration: number, gainPeak = 0.08, delay = 0, filterHz = 900) {
+    const ctx = this.getCtx();
+    if (!ctx) return;
+    const now = ctx.currentTime + delay;
+    const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * duration));
+    const buffer = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleCount * 0.35));
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(filterHz, now);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(gainPeak, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start(now);
+    src.stop(now + duration + 0.02);
+  }
+
   public cursor() {
-    const pitch = 520 + (Math.random() - 0.5) * 40;
-    this.playTone(pitch, 0.045, 'square', 0.03);
+    const pitch = 680 + (Math.random() - 0.5) * 40;
+    this.playTone(pitch, 0.035, 'square', 0.025);
   }
 
   public select() {
-    this.playTone(587.33, 0.07, 'triangle', 0.08, 0);
-    this.playTone(880, 0.09, 'triangle', 0.07, 0.055);
+    this.playTone(587.33, 0.06, 'triangle', 0.075, 0);
+    this.playTone(880, 0.08, 'triangle', 0.065, 0.05);
   }
 
   public cancel() {
-    this.playTone(440, 0.06, 'triangle', 0.06, 0, 290);
+    this.playTone(420, 0.055, 'triangle', 0.055, 0, 260);
   }
 
   public step() {
-    const pitch = 190 + (Math.random() - 0.5) * 28;
-    this.playTone(pitch, 0.05, 'triangle', 0.045, 0, 120);
+    const pitch = 155 + (Math.random() - 0.5) * 24;
+    this.playTone(pitch, 0.048, 'triangle', 0.045, 0, 95);
   }
 
   public slash(isCrit = false) {
     if (isCrit) {
-      this.playTone(220, 0.14, 'sawtooth', 0.12, 0, 65);
-      this.playTone(660, 0.12, 'square', 0.09, 0.02, 1100);
-      this.playTone(140, 0.24, 'sawtooth', 0.13, 0.05, 45);
+      // Heavy tank cannon / armor-piercing direct hit explosion!
+      this.playNoiseBurst(0.28, 0.14, 0, 620);
+      this.playTone(135, 0.24, 'sawtooth', 0.13, 0, 38);
+      this.playTone(520, 0.09, 'square', 0.07, 0.02, 180);
     } else {
-      this.playTone(480, 0.09, 'sawtooth', 0.08, 0, 160);
-      this.playTone(180, 0.12, 'triangle', 0.08, 0.02, 85);
+      // Crisp rifle / machine-gun double burst crack!
+      this.playNoiseBurst(0.09, 0.09, 0, 1800);
+      this.playNoiseBurst(0.08, 0.08, 0.065, 1600);
+      this.playTone(170, 0.1, 'triangle', 0.07, 0, 68);
     }
   }
 
   public miss() {
-    this.playTone(420, 0.11, 'sine', 0.05, 0, 260);
+    // Ricochet ping!
+    this.playTone(980, 0.12, 'sine', 0.045, 0, 390);
   }
 
   public magic() {
-    this.playTone(520, 0.16, 'sine', 0.08, 0, 980);
-    this.playTone(780, 0.18, 'triangle', 0.07, 0.06, 320);
+    // Artillery / Rocket / Missile whistle & deep concussive blast!
+    this.playTone(760, 0.14, 'sine', 0.05, 0, 280);
+    this.playNoiseBurst(0.32, 0.13, 0.1, 480);
+    this.playTone(110, 0.26, 'sawtooth', 0.1, 0.1, 36);
   }
 
   public heal() {
-    this.playTone(523.25, 0.12, 'sine', 0.08, 0);
-    this.playTone(659.25, 0.12, 'sine', 0.08, 0.08);
-    this.playTone(783.99, 0.18, 'sine', 0.09, 0.16);
-    this.playTone(1046.5, 0.24, 'triangle', 0.07, 0.24);
+    this.playTone(523.25, 0.11, 'sine', 0.075, 0);
+    this.playTone(659.25, 0.11, 'sine', 0.075, 0.075);
+    this.playTone(783.99, 0.16, 'sine', 0.085, 0.15);
+    this.playTone(1046.5, 0.22, 'triangle', 0.065, 0.22);
   }
 
   public phaseBanner(isPlayer: boolean) {

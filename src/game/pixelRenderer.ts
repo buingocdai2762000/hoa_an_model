@@ -1,5 +1,5 @@
 import {
-  getUnitSpriteSheet,
+  getUnitSpriteCanvas,
   SPRITE_H,
   SPRITE_SHEET_COLS,
   SPRITE_W,
@@ -952,7 +952,8 @@ export function stepWeatherParticle(
 
 const PARTICLE_POOL_SIZE = 120;
 const SPLASH_POOL_SIZE = 22;
-const TILE_PX = 32; // Native 32x32 studio pixel-art tile resolution!
+export const TILE_PX = 192; // Native 192x192 Ultra-HD military pixel block resolution!
+const MINI_TILE_PX = 8;
 
 export class TacticalBoardRenderer {
   private particles: WeatherParticle[] = [];
@@ -969,9 +970,14 @@ export class TacticalBoardRenderer {
   private camPanY = 0;
   private lastTrackedCursor: TileCoord | null = null;
 
-  // Cached 32x32-per-tile offscreen terrain canvas (rebuilt ONLY when map/biome changes)
-  private terrainCache: HTMLCanvasElement | null = null;
-  private terrainCacheKey = '';
+  // Cached 192x192 per-tile sprite stamps + viewport terrain buffer + minimap overview canvas
+  private tileStampCache = new Map<string, HTMLCanvasElement>();
+  private viewportTerrainCache: HTMLCanvasElement | null = null;
+  private viewportTerrainKey = '';
+  private viewportGridRef: TerrainType[][] | null = null;
+  private minimapCache: HTMLCanvasElement | null = null;
+  private minimapCacheKey = '';
+  private minimapGridRef: TerrainType[][] | null = null;
 
   constructor() {
     for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
@@ -1004,7 +1010,7 @@ export class TacticalBoardRenderer {
   }
 
   public setZoomLevel(nextZoom: number): number {
-    const clamped = Math.max(1.0, Math.min(2.25, Math.round(nextZoom * 100) / 100));
+    const clamped = Math.max(1.0, Math.min(4.0, Math.round(nextZoom * 100) / 100));
     this.zoomLevel = clamped;
     if (clamped <= 1.01) {
       this.camPanX = 0;
@@ -1141,94 +1147,208 @@ export class TacticalBoardRenderer {
   }
 
   /**
-   * Builds a rich 32x32-per-tile HD-2D pixel-art terrain map with auto-tiling,
-   * cast shadows, layered multi-tree forests, cobblestone roads, miniature forts,
-   * and atmospheric sunbeams onto a cached offscreen canvas.
+   * Computes neighbor auto-tile signature for a cell and returns a cached native 192x192
+   * Ultra-HD pixel-art tile canvas with full military battlefield micro-detail.
    */
-  private ensureTerrainCache(grid: TerrainType[][], biome: BiomeId): HTMLCanvasElement {
+  private getTileStamp192(
+    grid: TerrainType[][],
+    biome: BiomeId,
+    gx: number,
+    gy: number,
+    p: BiomePalette
+  ): HTMLCanvasElement {
     const rows = grid.length;
     const cols = grid[0].length;
-    const sig = `${biome}_${cols}x${rows}_${grid.map((r) => r.join(',')).join('|')}`;
-    if (this.terrainCache && this.terrainCacheKey === sig) {
-      return this.terrainCache;
+    const t = grid[gy][gx];
+    const nT = gy > 0 ? grid[gy - 1][gx] : t;
+    const sT = gy + 1 < rows ? grid[gy + 1][gx] : t;
+    const wT = gx > 0 ? grid[gy][gx - 1] : t;
+    const eT = gx + 1 < cols ? grid[gy][gx + 1] : t;
+
+    let mask = 0;
+    if (t === 'ROAD' || t === 'THRONE') {
+      const roadLike = (nt: TerrainType) => nt === 'ROAD' || nt === 'BRIDGE' || nt === 'THRONE';
+      mask = (roadLike(nT) ? 1 : 0) | (roadLike(sT) ? 2 : 0) | (roadLike(wT) ? 4 : 0) | (roadLike(eT) ? 8 : 0);
+    } else if (t === 'WATER' || t === 'LAVA') {
+      const liq = (nt: TerrainType) => nt === t || nt === 'BRIDGE';
+      mask = (liq(nT) ? 1 : 0) | (liq(sT) ? 2 : 0) | (liq(wT) ? 4 : 0) | (liq(eT) ? 8 : 0);
+    } else if (t === 'WALL') {
+      mask =
+        (nT === 'WALL' ? 1 : 0) |
+        (sT === 'WALL' ? 2 : 0) |
+        (wT === 'WALL' ? 4 : 0) |
+        (eT === 'WALL' ? 8 : 0);
+    }
+
+    const castN =
+      gy > 0 &&
+      t !== 'WALL' &&
+      t !== 'WATER' &&
+      (nT === 'WALL' || nT === 'FORT' || nT === 'MOUNTAIN' || nT === 'FOREST' || nT === 'SHOP_ARMORY' || nT === 'SHOP_VENDOR')
+        ? nT === 'WALL'
+          ? 2
+          : 1
+        : 0;
+    const castW =
+      gx > 0 &&
+      t !== 'WALL' &&
+      t !== 'WATER' &&
+      (wT === 'WALL' || wT === 'FORT' || wT === 'MOUNTAIN' || wT === 'FOREST' || wT === 'SHOP_ARMORY' || wT === 'SHOP_VENDOR')
+        ? 1
+        : 0;
+
+    const variant = (((gx * 73856093) ^ (gy * 19349663)) >>> 0) % 6;
+    const key = `${biome}_${t}_${mask}_${castN}_${castW}_${variant}`;
+    const cached = this.tileStampCache.get(key);
+    if (cached) return cached;
+
+    if (this.tileStampCache.size > 560) {
+      this.tileStampCache.clear();
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = cols * TILE_PX;
-    canvas.height = rows * TILE_PX;
-    const ctx = canvas.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
+    canvas.width = TILE_PX;
+    canvas.height = TILE_PX;
+    const tctx = canvas.getContext('2d')!;
+    tctx.imageSmoothingEnabled = false;
 
+    // Render seamless organic base + cast shadow + vertical structure on a 6x sub-pixel grid (32*6 = 192)
+    tctx.save();
+    tctx.scale(TILE_PX / 32, TILE_PX / 32);
+    this.bakeBaseTile32(tctx, t, mask, variant, p);
+    if (castN > 0) {
+      tctx.fillStyle = 'rgba(10, 14, 28, 0.22)';
+      tctx.fillRect(0, 0, 32, castN === 2 ? 5 : 3);
+    }
+    if (castW > 0) {
+      tctx.fillStyle = 'rgba(10, 14, 28, 0.18)';
+      tctx.fillRect(0, 0, 3, 32);
+    }
+    this.bakeFeatureTile32(tctx, t, mask, variant, p);
+    tctx.restore();
+
+    // Clean native 192x192 detail pass
+    this.bakeMicroDetail192(tctx, t, mask, variant, p);
+
+    this.tileStampCache.set(key, canvas);
+    return canvas;
+  }
+
+  private ensureMinimapCache(grid: TerrainType[][], biome: BiomeId): HTMLCanvasElement {
+    if (this.minimapCache && this.minimapGridRef === grid && this.minimapCacheKey === biome) {
+      return this.minimapCache;
+    }
+    const rows = grid.length;
+    const cols = grid[0].length;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * MINI_TILE_PX;
+    canvas.height = rows * MINI_TILE_PX;
+    const mctx = canvas.getContext('2d')!;
+    mctx.imageSmoothingEnabled = false;
     const p = BIOME_PALETTES[biome];
 
-    // Pass 1: Base ground, auto-tiled roads, water/lava banks, bridges
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        this.bakeBaseTile(ctx, grid, x, y, p);
-      }
-    }
-
-    // Pass 2: Directional cast shadows (southeast drop shadows from tall walls, forts, mountains, trees)
-    ctx.fillStyle = 'rgba(10, 14, 28, 0.28)';
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const t = grid[y][x];
-        if (
-          t === 'WALL' ||
-          t === 'FORT' ||
-          t === 'MOUNTAIN' ||
-          t === 'FOREST' ||
-          t === 'SHOP_ARMORY' ||
-          t === 'SHOP_VENDOR'
-        ) {
-          const px = x * TILE_PX;
-          const py = y * TILE_PX;
-          // Cast south shadow onto tile below if ground
-          if (y + 1 < rows && grid[y + 1][x] !== 'WALL' && grid[y + 1][x] !== 'WATER') {
-            ctx.fillRect(px + 3, (y + 1) * TILE_PX, TILE_PX - 2, t === 'WALL' ? 8 : 5);
-          }
-          // Cast east shadow
-          if (x + 1 < cols && grid[y][x + 1] !== 'WALL' && grid[y][x + 1] !== 'WATER') {
-            ctx.fillRect((x + 1) * TILE_PX, py + 4, 4, TILE_PX - 4);
-          }
+        const px = x * MINI_TILE_PX;
+        const py = y * MINI_TILE_PX;
+        mctx.fillStyle =
+          t === 'WATER'
+            ? p.waterDeep
+            : t === 'LAVA'
+            ? '#b91c1c'
+            : t === 'BRIDGE'
+            ? '#8c5e35'
+            : t === 'ROAD'
+            ? p.roadLight
+            : t === 'WALL'
+            ? p.wallMid
+            : t === 'MOUNTAIN'
+            ? p.mountMid
+            : t === 'FOREST'
+            ? p.treeMid
+            : t === 'SAND'
+            ? '#be9456'
+            : t === 'SNOW'
+            ? '#b1cde6'
+            : t === 'FORT'
+            ? '#64748b'
+            : t === 'THRONE'
+            ? '#eab308'
+            : p.grassMid;
+        mctx.fillRect(px, py, MINI_TILE_PX, MINI_TILE_PX);
+        if (t === 'FOREST' || t === 'MOUNTAIN' || t === 'FORT') {
+          mctx.fillStyle = t === 'FOREST' ? p.treeDeep : t === 'MOUNTAIN' ? p.mountPeak : '#1e293b';
+          mctx.fillRect(px + 2, py + 2, MINI_TILE_PX - 4, MINI_TILE_PX - 4);
         }
       }
     }
 
-    // Pass 3: Detailed 32x32 vertical structures (multi-tree forests, sculpted peaks, masonry walls, forts, throne)
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        this.bakeFeatureTile(ctx, grid, x, y, p);
+    this.minimapCache = canvas;
+    this.minimapCacheKey = biome;
+    this.minimapGridRef = grid;
+    return canvas;
+  }
+
+  private ensureViewportTerrainCache(
+    grid: TerrainType[][],
+    biome: BiomeId,
+    palette: BiomePalette,
+    viewX: number,
+    viewY: number,
+    viewW: number,
+    viewH: number,
+    offsetX: number,
+    offsetY: number,
+    tileSize: number,
+    minVisCol: number,
+    maxVisCol: number,
+    minVisRow: number,
+    maxVisRow: number
+  ): HTMLCanvasElement {
+    const safeW = Math.max(1, Math.round(viewW));
+    const safeH = Math.max(1, Math.round(viewH));
+    const relOffX = Math.round(offsetX - viewX);
+    const relOffY = Math.round(offsetY - viewY);
+    const key = `${biome}_${safeW}x${safeH}_${Math.round(tileSize * 100)}_${relOffX}_${relOffY}`;
+
+    if (
+      this.viewportTerrainCache &&
+      this.viewportGridRef === grid &&
+      this.viewportTerrainKey === key
+    ) {
+      return this.viewportTerrainCache;
+    }
+
+    if (
+      !this.viewportTerrainCache ||
+      this.viewportTerrainCache.width !== safeW ||
+      this.viewportTerrainCache.height !== safeH
+    ) {
+      this.viewportTerrainCache = document.createElement('canvas');
+      this.viewportTerrainCache.width = safeW;
+      this.viewportTerrainCache.height = safeH;
+    }
+
+    const vctx = this.viewportTerrainCache.getContext('2d')!;
+    vctx.imageSmoothingEnabled = tileSize < TILE_PX * 0.85;
+    vctx.imageSmoothingQuality = 'high';
+    vctx.fillStyle = palette.bg;
+    vctx.fillRect(0, 0, safeW, safeH);
+
+    for (let y = minVisRow; y <= maxVisRow; y++) {
+      const py = relOffY + y * tileSize;
+      for (let x = minVisCol; x <= maxVisCol; x++) {
+        const px = relOffX + x * tileSize;
+        const stamp = this.getTileStamp192(grid, biome, x, y, palette);
+        vctx.drawImage(stamp, 0, 0, TILE_PX, TILE_PX, px, py, tileSize, tileSize);
       }
     }
 
-    // Pass 4: Crisp subtle HD-2D pixel tile seams & diagonal warm sunbeams
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.11)';
-    for (let x = 1; x < cols; x++) {
-      ctx.fillRect(x * TILE_PX, 0, 1, rows * TILE_PX);
-    }
-    for (let y = 1; y < rows; y++) {
-      ctx.fillRect(0, y * TILE_PX, cols * TILE_PX, 1);
-    }
-
-    // Diagonal golden sunlight shafts baked cleanly once (zero runtime cost!)
-    ctx.save();
-    ctx.fillStyle = p.sunBeam;
-    for (let i = 0; i < 4; i++) {
-      const sx = i * 145 + 35;
-      ctx.beginPath();
-      ctx.moveTo(sx, 0);
-      ctx.lineTo(sx + 58, 0);
-      ctx.lineTo(sx - 68, rows * TILE_PX);
-      ctx.lineTo(sx - 126, rows * TILE_PX);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
-
-    this.terrainCache = canvas;
-    this.terrainCacheKey = sig;
-    return canvas;
+    this.viewportGridRef = grid;
+    this.viewportTerrainKey = key;
+    return this.viewportTerrainCache;
   }
 
   private fillPixelDisc(
@@ -1246,325 +1366,191 @@ export class TacticalBoardRenderer {
     }
   }
 
-  private bakeBaseTile(
+  private bakeBaseTile32(
     ctx: CanvasRenderingContext2D,
-    grid: TerrainType[][],
-    gx: number,
-    gy: number,
+    t: TerrainType,
+    mask: number,
+    variant: number,
     p: BiomePalette
   ) {
-    const px = gx * TILE_PX;
-    const py = gy * TILE_PX;
-    const t = grid[gy][gx];
-    const h1 = ((gx * 73856093) ^ (gy * 19349663)) >>> 0;
-    const h2 = ((gx * 83492791) ^ (gy * 2971215073)) >>> 0;
-    const h3 = ((gx * 2654435761) ^ (gy * 2246822519)) >>> 0;
+    const h1 = ((variant + 1) * 73856093) >>> 0;
+    const h2 = ((variant + 3) * 83492791) >>> 0;
 
-    // 1. Rich hue-shifted Meadow / Sand / Snow ground base
     const isSand = t === 'SAND';
     const isSnow = t === 'SNOW';
     const cShadow = isSand ? '#946f3d' : isSnow ? '#64819e' : p.grassShadow;
     const cMid = isSand ? '#be9456' : isSnow ? '#8ba8c4' : p.grassMid;
     const cLight = isSand ? '#d9b170' : isSnow ? '#b1cde6' : p.grassLight;
-    const cSpec = isSand ? '#f0d499' : isSnow ? '#e3f2ff' : p.grassSpec;
 
+    // Seamless uniform meadow/sand/snow base so adjacent tiles never form square boundaries
     ctx.fillStyle = cMid;
-    ctx.fillRect(px, py, TILE_PX, TILE_PX);
+    ctx.fillRect(0, 0, 32, 32);
 
-    // Organic pixel-sculpted turf swells & checkerboard dithering (zero boxy rectangles!)
-    ctx.fillStyle = (gx + gy) % 2 === 0 ? cLight : cShadow;
-    ctx.globalAlpha = 0.24;
-    this.fillPixelDisc(ctx, px + 8 + (h1 % 9), py + 9 + ((h1 >>> 3) % 8), 8, 5);
-    this.fillPixelDisc(ctx, px + 22 - (h2 % 7), py + 22 - ((h2 >>> 4) % 7), 7, 5);
-    ctx.globalAlpha = 1;
-
-    // Dappled pixel grass tufts / sand dunes / snow drifts
-    for (let i = 0; i < 7; i++) {
-      const bx = ((h1 + i * 17 + (h3 % 5)) % 25) + 3;
-      const by = ((h2 + i * 21 + ((h3 >>> 3) % 5)) % 25) + 3;
-      if (isSand) {
-        ctx.fillStyle = i % 2 === 0 ? cShadow : cLight;
-        ctx.fillRect(px + bx, py + by, 6, 1);
-        ctx.fillRect(px + bx + 2, py + by + 1, 5, 1);
-        ctx.fillStyle = cSpec;
-        ctx.fillRect(px + bx + 1, py + by - 1, 3, 1);
-      } else {
-        // Classic 3-blade GBA pixel-art grass tuft
-        ctx.fillStyle = cShadow;
-        ctx.fillRect(px + bx, py + by + 2, 4, 1);
-        ctx.fillStyle = i % 2 === 0 ? cLight : cShadow;
-        ctx.fillRect(px + bx, py + by, 1, 2);
-        ctx.fillRect(px + bx + 2, py + by - 1, 1, 3);
-        ctx.fillRect(px + bx + 4, py + by + 1, 1, 2);
-        if (i % 3 === 0) {
-          ctx.fillStyle = cSpec;
-          ctx.fillRect(px + bx + 2, py + by - 1, 1, 1);
-        }
-      }
+    // Sparse, ultra-soft organic turf variation on only a subset of variants (zero repetitive grid orbs!)
+    if (variant === 0 || variant === 3) {
+      ctx.fillStyle = cLight;
+      ctx.globalAlpha = 0.09;
+      this.fillPixelDisc(ctx, 11 + (h1 % 9), 12 + ((h1 >>> 3) % 8), 9, 5);
+      ctx.globalAlpha = 1;
+    } else if (variant === 2 || variant === 5) {
+      ctx.fillStyle = cShadow;
+      ctx.globalAlpha = 0.08;
+      this.fillPixelDisc(ctx, 18 - (h2 % 7), 18 - ((h2 >>> 4) % 7), 8, 5);
+      ctx.globalAlpha = 1;
     }
 
-    // Lush wildflowers, clover patches & weathered pebbles on open plain tiles
-    if (t === 'PLAIN' && h1 % 3 === 0) {
-      const fx = 5 + (h2 % 18);
-      const fy = 5 + ((h1 >>> 3) % 18);
-      ctx.fillStyle = cShadow;
-      ctx.fillRect(px + fx, py + fy + 2, 5, 2);
-      ctx.fillStyle = p.treeLight;
-      ctx.fillRect(px + fx + 1, py + fy + 1, 3, 2);
-      ctx.fillStyle = h2 % 2 === 0 ? p.flowerA : p.flowerB;
-      ctx.fillRect(px + fx, py + fy, 2, 2);
-      ctx.fillRect(px + fx + 4, py + fy + 1, 2, 1);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(px + fx, py + fy, 1, 1);
-    } else if (t === 'PLAIN' && h1 % 6 === 1) {
-      const rx = 7 + (h2 % 16);
-      const ry = 7 + ((h1 >>> 2) % 16);
-      ctx.fillStyle = cShadow;
-      ctx.fillRect(px + rx, py + ry + 3, 6, 2);
-      ctx.fillStyle = p.wallDark;
-      ctx.fillRect(px + rx, py + ry + 1, 5, 3);
-      ctx.fillStyle = p.wallTop;
-      ctx.fillRect(px + rx + 1, py + ry, 3, 2);
-      ctx.fillStyle = p.wallSpec;
-      ctx.fillRect(px + rx + 1, py + ry, 2, 1);
+    if (isSand && variant % 2 === 0) {
+      ctx.fillStyle = cLight;
+      ctx.globalAlpha = 0.22;
+      const sx = 5 + (h1 % 10);
+      const sy = 9 + (h2 % 12);
+      ctx.fillRect(sx, sy, 11, 1);
+      ctx.globalAlpha = 1;
     }
 
-    // 2. Auto-tiled Medieval Cobblestone Road with organic dirt shoulders & hash-varied flagstones
     if (t === 'ROAD' || t === 'THRONE') {
-      const isRoadLike = (nx: number, ny: number) => {
-        if (ny < 0 || nx < 0 || ny >= grid.length || nx >= grid[0].length) return true;
-        const nt = grid[ny][nx];
-        return nt === 'ROAD' || nt === 'BRIDGE' || nt === 'THRONE';
-      };
-      const n = isRoadLike(gx, gy - 1);
-      const s = isRoadLike(gx, gy + 1);
-      const w = isRoadLike(gx - 1, gy);
-      const e = isRoadLike(gx + 1, gy);
-
+      const n = (mask & 1) !== 0;
+      const s = (mask & 2) !== 0;
+      const w = (mask & 4) !== 0;
+      const e = (mask & 8) !== 0;
       const padT = n ? 0 : 4;
       const padB = s ? 0 : 4;
       const padL = w ? 0 : 4;
       const padR = e ? 0 : 4;
 
-      // Stepped natural earth shoulder border along grass transitions
       ctx.fillStyle = p.roadBorder;
       ctx.fillRect(
-        px + padL - (w ? 0 : 1),
-        py + padT - (n ? 0 : 1),
-        TILE_PX - padL - padR + (w ? 0 : 1) + (e ? 0 : 1),
-        TILE_PX - padT - padB + (n ? 0 : 1) + (s ? 0 : 1)
+        padL - (w ? 0 : 1),
+        padT - (n ? 0 : 1),
+        32 - padL - padR + (w ? 0 : 1) + (e ? 0 : 1),
+        32 - padT - padB + (n ? 0 : 1) + (s ? 0 : 1)
       );
-      // Organic grass blades overhanging the road curb so borders look hand-painted
-      if (!n) {
-        for (let k = 2; k < 30; k += 5) {
-          ctx.fillStyle = (k + h1) % 2 === 0 ? cShadow : cLight;
-          ctx.fillRect(px + k, py + 3, 2, 2);
-        }
-      }
-      if (!s) {
-        for (let k = 3; k < 29; k += 5) {
-          ctx.fillStyle = (k + h2) % 2 === 0 ? cShadow : cLight;
-          ctx.fillRect(px + k, py + TILE_PX - 5, 2, 2);
-        }
-      }
-
-      // Warm mortar base
       ctx.fillStyle = p.roadDark;
-      ctx.fillRect(px + padL, py + padT, TILE_PX - padL - padR, TILE_PX - padT - padB);
+      ctx.fillRect(padL, padT, 32 - padL - padR, 32 - padT - padB);
 
-      // Hash-varied organic medieval flagstones (breaks repetition across adjacent road tiles!)
-      const variant = ((h1 ^ (gx * 3 + gy * 7)) >>> 0) % 3;
       const stoneSets: Array<Array<[number, number, number, number]>> = [
-        [
-          [2, 2, 12, 8],
-          [16, 2, 13, 7],
-          [2, 12, 9, 8],
-          [13, 11, 16, 9],
-          [2, 22, 14, 8],
-          [18, 22, 11, 8],
-        ],
-        [
-          [2, 2, 9, 9],
-          [13, 2, 16, 8],
-          [2, 13, 15, 7],
-          [19, 12, 10, 9],
-          [2, 22, 11, 8],
-          [15, 23, 14, 7],
-        ],
-        [
-          [2, 2, 15, 7],
-          [19, 2, 10, 8],
-          [2, 11, 11, 9],
-          [15, 12, 14, 8],
-          [2, 22, 13, 8],
-          [17, 22, 12, 8],
-        ],
+        [[2, 2, 12, 8], [16, 2, 13, 7], [2, 12, 9, 8], [13, 11, 16, 9], [2, 22, 14, 8], [18, 22, 11, 8]],
+        [[2, 2, 9, 9], [13, 2, 16, 8], [2, 13, 15, 7], [19, 12, 10, 9], [2, 22, 11, 8], [15, 23, 14, 7]],
+        [[2, 2, 15, 7], [19, 2, 10, 8], [2, 11, 11, 9], [15, 12, 14, 8], [2, 22, 13, 8], [17, 22, 12, 8]],
       ];
-
-      const stones = stoneSets[variant];
+      const stones = stoneSets[variant % 3];
       for (let i = 0; i < stones.length; i++) {
         const [sx, sy, sw, sh] = stones[i];
         const x1 = Math.max(padL + 1, sx);
         const y1 = Math.max(padT + 1, sy);
-        const x2 = Math.min(TILE_PX - padR - 1, sx + sw);
-        const y2 = Math.min(TILE_PX - padB - 1, sy + sh);
+        const x2 = Math.min(32 - padR - 1, sx + sw);
+        const y2 = Math.min(32 - padB - 1, sy + sh);
         if (x2 - x1 < 4 || y2 - y1 < 3) continue;
-
-        const tone = (i + h2) % 4;
+        const tone = (i + variant) % 4;
         ctx.fillStyle = tone === 0 ? p.roadMid : tone === 3 ? p.roadDark : p.roadLight;
-        // Rounded beveled corners on flagstones
-        ctx.fillRect(px + x1 + 1, py + y1, x2 - x1 - 2, y2 - y1);
-        ctx.fillRect(px + x1, py + y1 + 1, x2 - x1, y2 - y1 - 2);
-        // Bottom-right shadow bevel
-        ctx.fillStyle = p.roadBorder;
-        ctx.fillRect(px + x1 + 1, py + y2 - 1, x2 - x1 - 2, 1);
-        // Top-left warm sunlit edge highlight
-        ctx.fillStyle = 'rgba(255, 250, 235, 0.34)';
-        ctx.fillRect(px + x1 + 1, py + y1, x2 - x1 - 3, 1);
-      }
-      // Occasional tiny moss pixel in mortar
-      if (h3 % 3 === 0) {
-        ctx.fillStyle = cShadow;
-        ctx.fillRect(px + 12 + (h1 % 6), py + 10 + (h2 % 8), 2, 1);
+        ctx.fillRect(x1 + 1, y1, x2 - x1 - 2, y2 - y1);
+        ctx.fillRect(x1, y1 + 1, x2 - x1, y2 - y1 - 2);
       }
       return;
     }
 
-    // 3. Auto-tiled Deep Water & Glowing Lava with sculpted embankments
     if (t === 'WATER' || t === 'LAVA') {
       const isLava = t === 'LAVA';
-      const isLiquid = (nx: number, ny: number) => {
-        if (ny < 0 || nx < 0 || ny >= grid.length || nx >= grid[0].length) return true;
-        return grid[ny][nx] === t || grid[ny][nx] === 'BRIDGE';
-      };
       ctx.fillStyle = isLava ? '#9c1f0e' : p.waterDeep;
-      ctx.fillRect(px, py, TILE_PX, TILE_PX);
-
-      // Subtle deep water caustics
+      ctx.fillRect(0, 0, 32, 32);
       ctx.fillStyle = isLava ? '#b82c12' : p.waterShallow;
-      ctx.globalAlpha = 0.25;
-      this.fillPixelDisc(ctx, px + 10 + (h1 % 10), py + 12 + (h2 % 10), 8, 4);
+      ctx.globalAlpha = 0.26;
+      this.fillPixelDisc(ctx, 10 + (h1 % 10), 12 + (h2 % 10), 8, 4);
       ctx.globalAlpha = 1;
 
       const rimColor = isLava ? '#521f18' : p.waterRim;
       const shallowColor = isLava ? '#db541a' : p.waterShallow;
-
-      if (!isLiquid(gx, gy - 1)) {
+      if ((mask & 1) === 0) {
         ctx.fillStyle = rimColor;
-        ctx.fillRect(px, py, TILE_PX, 4);
+        ctx.fillRect(0, 0, 32, 4);
         ctx.fillStyle = shallowColor;
-        ctx.fillRect(px, py + 4, TILE_PX, 4);
+        ctx.fillRect(0, 4, 32, 4);
       }
-      if (!isLiquid(gx, gy + 1)) {
+      if ((mask & 2) === 0) {
         ctx.fillStyle = shallowColor;
-        ctx.fillRect(px, py + TILE_PX - 6, TILE_PX, 3);
+        ctx.fillRect(0, 26, 32, 3);
         ctx.fillStyle = rimColor;
-        ctx.fillRect(px, py + TILE_PX - 3, TILE_PX, 3);
+        ctx.fillRect(0, 29, 32, 3);
       }
-      if (!isLiquid(gx - 1, gy)) {
+      if ((mask & 4) === 0) {
         ctx.fillStyle = rimColor;
-        ctx.fillRect(px, py, 3, TILE_PX);
+        ctx.fillRect(0, 0, 3, 32);
         ctx.fillStyle = shallowColor;
-        ctx.fillRect(px + 3, py, 3, TILE_PX);
+        ctx.fillRect(3, 0, 3, 32);
       }
-      if (!isLiquid(gx + 1, gy)) {
+      if ((mask & 8) === 0) {
         ctx.fillStyle = shallowColor;
-        ctx.fillRect(px + TILE_PX - 6, py, 3, TILE_PX);
+        ctx.fillRect(26, 0, 3, 32);
         ctx.fillStyle = rimColor;
-        ctx.fillRect(px + TILE_PX - 3, py, 3, TILE_PX);
+        ctx.fillRect(29, 0, 3, 32);
       }
       return;
     }
 
-    // 4. Ornate Timber Bridge over water/chasm with planks, railings & iron nails
     if (t === 'BRIDGE') {
       ctx.fillStyle = p.waterDeep;
-      ctx.fillRect(px, py, TILE_PX, TILE_PX);
+      ctx.fillRect(0, 0, 32, 32);
       ctx.fillStyle = p.waterShallow;
-      ctx.fillRect(px, py + 2, TILE_PX, 2);
-      ctx.fillRect(px, py + TILE_PX - 4, TILE_PX, 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(px, py + TILE_PX - 5, TILE_PX, 3);
+      ctx.fillRect(0, 2, 32, 2);
+      ctx.fillRect(0, 28, 32, 2);
       ctx.fillStyle = '#5c3c22';
-      ctx.fillRect(px, py + 4, TILE_PX, TILE_PX - 8);
+      ctx.fillRect(0, 4, 32, 24);
       for (let i = 0; i < 6; i++) {
-        const bx = px + i * 5 + 1;
+        const bx = i * 5 + 1;
         ctx.fillStyle = i % 2 === 0 ? '#8c5e35' : '#7a502c';
-        ctx.fillRect(bx, py + 6, 4, TILE_PX - 12);
+        ctx.fillRect(bx, 6, 4, 20);
         ctx.fillStyle = '#ad7949';
-        ctx.fillRect(bx, py + 6, 4, 2);
-        ctx.fillStyle = '#291a10';
-        ctx.fillRect(bx + 1, py + 8, 1, 1);
-        ctx.fillRect(bx + 1, py + TILE_PX - 9, 1, 1);
+        ctx.fillRect(bx, 6, 4, 2);
       }
-      ctx.fillStyle = '#472c17';
-      ctx.fillRect(px, py + 3, TILE_PX, 3);
-      ctx.fillRect(px, py + TILE_PX - 6, TILE_PX, 3);
-      ctx.fillStyle = '#b88654';
-      ctx.fillRect(px, py + 3, TILE_PX, 1);
-      ctx.fillRect(px, py + TILE_PX - 6, TILE_PX, 1);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(0, 3, 32, 3);
+      ctx.fillRect(0, 26, 32, 3);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(0, 3, 32, 1);
+      ctx.fillRect(0, 26, 32, 1);
     }
   }
 
-  private bakeFeatureTile(
+  private bakeFeatureTile32(
     ctx: CanvasRenderingContext2D,
-    grid: TerrainType[][],
-    gx: number,
-    gy: number,
+    t: TerrainType,
+    mask: number,
+    variant: number,
     p: BiomePalette
   ) {
-    const px = gx * TILE_PX;
-    const py = gy * TILE_PX;
-    const t = grid[gy][gx];
-    const h = ((gx * 374761393) ^ (gy * 668265263)) >>> 0;
-
-    // 1. FOREST: Lush Sculpted Pixel-Art Woodland Cluster (rounded multi-tiered canopies + undergrowth!)
     if (t === 'FOREST') {
-      // Soft mossy woodland shadow carpet on tile floor
       ctx.fillStyle = p.treeDeep;
       ctx.globalAlpha = 0.35;
-      this.fillPixelDisc(ctx, px + 16, py + 23, 13, 6);
+      this.fillPixelDisc(ctx, 16, 23, 13, 6);
       ctx.globalAlpha = 1;
 
       const drawOakTree = (cx: number, cy: number, rx: number, ry: number) => {
-        // Grounded shadow
         ctx.fillStyle = 'rgba(8, 16, 22, 0.48)';
         this.fillPixelDisc(ctx, cx + 1, cy + 7, rx - 1, 3);
-        // Sculpted bark trunk with roots
         ctx.fillStyle = p.barkDark;
         ctx.fillRect(cx - 2, cy + 1, 5, 7);
         ctx.fillRect(cx - 3, cy + 6, 7, 2);
         ctx.fillStyle = p.barkLight;
         ctx.fillRect(cx - 1, cy + 1, 2, 6);
-        // Deep silhouette canopy outline
         ctx.fillStyle = p.treeDeep;
         this.fillPixelDisc(ctx, cx, cy - 2, rx + 1, ry + 1);
-        // Cool shadow foliage base
         ctx.fillStyle = p.treeShadow;
         this.fillPixelDisc(ctx, cx, cy - 3, rx, ry);
-        // Midtone organic leaf puffs
         ctx.fillStyle = p.treeMid;
         this.fillPixelDisc(ctx, cx - 2, cy - 4, Math.max(3, rx - 2), Math.max(3, ry - 2));
         this.fillPixelDisc(ctx, cx + 2, cy - 3, Math.max(3, rx - 3), Math.max(2, ry - 2));
-        // Sunlit top-left foliage crown
         ctx.fillStyle = p.treeLight;
         this.fillPixelDisc(ctx, cx - 2, cy - 5, Math.max(2, rx - 4), Math.max(2, ry - 3));
-        ctx.fillRect(cx + 1, cy - ry, 3, 2);
-        // Crisp warm leaf specular dots
         ctx.fillStyle = p.treeSpec;
         ctx.fillRect(cx - 4, cy - ry, 2, 2);
-        ctx.fillRect(cx - 1, cy - ry - 1, 2, 1);
-        ctx.fillRect(cx + 2, cy - ry + 1, 1, 1);
       };
 
-      // Three overlapping handcrafted woodland trees filling the tile naturally
-      drawOakTree(px + 9 + (h % 2), py + 14, 7, 6);
-      drawOakTree(px + 23 - (h % 2), py + 15, 7, 6);
-      drawOakTree(px + 16, py + 22, 9, 7);
+      drawOakTree(9 + (variant % 2), 14, 7, 6);
+      drawOakTree(23 - (variant % 2), 15, 7, 6);
+      drawOakTree(16, 22, 9, 7);
       return;
     }
 
-    // 2. MOUNTAIN: Dramatic Faceted Stepped Mountain Ridge with sunlit rock planes
     if (t === 'MOUNTAIN') {
       const drawPeak = (cx: number, baseY: number, halfW: number, height: number) => {
         for (let row = 0; row < height; row++) {
@@ -1583,93 +1569,51 @@ export class TacticalBoardRenderer {
           }
         }
       };
-
-      drawPeak(px + 9, py + 26, 9, 17);
-      drawPeak(px + 23, py + 27, 9, 15);
-      drawPeak(px + 16, py + 31, 13, 24);
+      drawPeak(9, 26, 9, 17);
+      drawPeak(23, 27, 9, 15);
+      drawPeak(16, 31, 13, 24);
       return;
     }
 
-    // 3. WALL: Auto-tiled 3D Stone Fortress Ramparts with Textured Walkway & Crenellations!
     if (t === 'WALL') {
-      const hasWallN = gy - 1 >= 0 && grid[gy - 1][gx] === 'WALL';
-      const hasWallS = gy + 1 < grid.length && grid[gy + 1][gx] === 'WALL';
-      const hasWallW = gx - 1 >= 0 && grid[gy][gx - 1] === 'WALL';
-      const hasWallE = gx + 1 < grid[0].length && grid[gy][gx + 1] === 'WALL';
+      const hasWallN = (mask & 1) !== 0;
+      const hasWallS = (mask & 2) !== 0;
+      const hasWallW = (mask & 4) !== 0;
+      const hasWallE = (mask & 8) !== 0;
 
-      // Dark stone base outline
       ctx.fillStyle = p.wallShadow;
-      ctx.fillRect(px, py, TILE_PX, TILE_PX);
-
-      const topH = hasWallS ? TILE_PX : 14;
-
-      // Top Stone Parapet Walkway with textured ashlar flagstones (never flat!)
+      ctx.fillRect(0, 0, 32, 32);
+      const topH = hasWallS ? 32 : 14;
       ctx.fillStyle = p.wallMid;
-      ctx.fillRect(px, py, TILE_PX, topH);
+      ctx.fillRect(0, 0, 32, topH);
 
-      // Flagstone grid across the rampart deck
-      for (let ry = 1; ry < topH - 2; ry += 6) {
-        const rowShift = ((ry / 6) % 2) * 6;
-        for (let rx = 1; rx < TILE_PX - 2; rx += 10) {
-          const sx = px + ((rx + rowShift) % (TILE_PX - 4));
-          const sw = Math.min(9, px + TILE_PX - 2 - sx);
-          if (sw < 3) continue;
-          ctx.fillStyle = (rx + ry + h) % 3 === 0 ? p.wallMid : p.wallTop;
-          ctx.fillRect(sx, py + ry, sw, Math.min(5, topH - ry - 1));
-          ctx.fillStyle = p.wallSpec;
-          ctx.fillRect(sx, py + ry, sw, 1);
-          ctx.fillStyle = p.wallDark;
-          ctx.fillRect(sx, py + ry + Math.min(4, topH - ry - 2), sw, 1);
-        }
-      }
-
-      // Raised outer stone parapet ledges with crenellation merlons on exposed sides
       if (!hasWallW) {
         ctx.fillStyle = p.wallShadow;
-        ctx.fillRect(px, py, 4, topH);
+        ctx.fillRect(0, 0, 4, topH);
         ctx.fillStyle = p.wallSpec;
-        ctx.fillRect(px + 1, py + 1, 2, topH - 2);
-        for (let my = 4; my < topH - 4; my += 10) {
-          ctx.fillStyle = p.wallDark;
-          ctx.fillRect(px + 1, py + my, 3, 4);
-        }
+        ctx.fillRect(1, 1, 2, topH - 2);
       }
       if (!hasWallE) {
         ctx.fillStyle = p.wallShadow;
-        ctx.fillRect(px + TILE_PX - 4, py, 4, topH);
+        ctx.fillRect(28, 0, 4, topH);
         ctx.fillStyle = p.wallTop;
-        ctx.fillRect(px + TILE_PX - 3, py + 1, 2, topH - 2);
-        for (let my = 4; my < topH - 4; my += 10) {
-          ctx.fillStyle = p.wallDark;
-          ctx.fillRect(px + TILE_PX - 4, py + my, 3, 4);
-        }
+        ctx.fillRect(29, 1, 2, topH - 2);
       }
       if (!hasWallN) {
         ctx.fillStyle = p.wallSpec;
-        ctx.fillRect(px, py, TILE_PX, 2);
+        ctx.fillRect(0, 0, 32, 2);
       }
-
-      // Front 3D Vertical Masonry Wall Face when exposed to the south
       if (!hasWallS) {
         ctx.fillStyle = p.wallShadow;
-        ctx.fillRect(px, py + 13, TILE_PX, 2);
-        // Crenellation merlon notches along front lip
-        ctx.fillStyle = p.wallSpec;
-        ctx.fillRect(px + 1, py + 11, 6, 3);
-        ctx.fillRect(px + 10, py + 11, 5, 3);
-        ctx.fillRect(px + 18, py + 11, 5, 3);
-        ctx.fillRect(px + 26, py + 11, 5, 3);
-
+        ctx.fillRect(0, 13, 32, 2);
         ctx.fillStyle = p.wallDark;
-        ctx.fillRect(px + 1, py + 15, TILE_PX - 2, TILE_PX - 16);
-
-        // Weathered staggered stone masonry blocks
+        ctx.fillRect(1, 15, 30, 16);
         for (let row = 0; row < 3; row++) {
-          const by = py + 15 + row * 5;
+          const by = 15 + row * 5;
           const shift = (row % 2) * 5;
           for (let col = 0; col < 3; col++) {
-            const bx = px + 2 + ((col * 10 + shift) % 24);
-            const bw = Math.min(9, px + TILE_PX - 2 - bx);
+            const bx = 2 + ((col * 10 + shift) % 24);
+            const bw = Math.min(9, 30 - bx);
             if (bw < 3) continue;
             ctx.fillStyle = (row + col) % 2 === 0 ? p.wallMid : p.wallDark;
             ctx.fillRect(bx, by, bw, 4);
@@ -1677,187 +1621,180 @@ export class TacticalBoardRenderer {
             ctx.fillRect(bx, by, bw, 1);
           }
         }
-        // Dark mortar bottom base trim
-        ctx.fillStyle = p.wallShadow;
-        ctx.fillRect(px, py + TILE_PX - 2, TILE_PX, 2);
       }
       return;
     }
 
-    // 4. FORT: Miniature 32x32 Stone Citadel Keep with Grounded Courtyard Apron, Twin Turrets & Portcullis
     if (t === 'FORT') {
-      // Rounded cobblestone courtyard apron blending naturally into surrounding meadow
-      ctx.fillStyle = p.roadBorder;
-      this.fillPixelDisc(ctx, px + 16, py + 24, 14, 7);
-      ctx.fillStyle = p.roadMid;
-      this.fillPixelDisc(ctx, px + 16, py + 24, 12, 5);
-      // Base foundation stone outline
-      ctx.fillStyle = p.wallShadow;
-      ctx.fillRect(px + 3, py + 4, 26, 24);
-      // Main keep body
-      ctx.fillStyle = p.wallDark;
-      ctx.fillRect(px + 4, py + 9, 24, 18);
-      ctx.fillStyle = p.wallMid;
-      ctx.fillRect(px + 5, py + 10, 22, 15);
-
-      // Left & Right crenellated corner turrets
-      for (const tx of [px + 3, px + 21]) {
-        ctx.fillStyle = p.wallShadow;
-        ctx.fillRect(tx, py + 3, 8, 25);
-        ctx.fillStyle = p.wallMid;
-        ctx.fillRect(tx + 1, py + 6, 6, 21);
-        ctx.fillStyle = p.wallTop;
-        ctx.fillRect(tx + 1, py + 4, 2, 3);
-        ctx.fillRect(tx + 5, py + 4, 2, 3);
-        ctx.fillStyle = p.wallSpec;
-        ctx.fillRect(tx + 1, py + 4, 2, 1);
-        ctx.fillRect(tx + 5, py + 4, 2, 1);
-        // Arrow slit window
-        ctx.fillStyle = '#0f131f';
-        ctx.fillRect(tx + 3, py + 11, 2, 5);
+      ctx.fillStyle = '#5c4d35';
+      this.fillPixelDisc(ctx, 16, 23, 14, 7);
+      ctx.fillStyle = '#a38d64';
+      this.fillPixelDisc(ctx, 16, 23, 12, 5);
+      for (let sx = 4; sx <= 24; sx += 5) {
+        ctx.fillStyle = '#786644';
+        ctx.fillRect(sx, 23, 4, 3);
+        ctx.fillStyle = '#cbb789';
+        ctx.fillRect(sx, 23, 4, 1);
       }
-
-      // Center battlement parapet
-      ctx.fillStyle = p.wallTop;
-      ctx.fillRect(px + 11, py + 8, 10, 4);
-      ctx.fillStyle = p.wallSpec;
-      ctx.fillRect(px + 11, py + 8, 10, 1);
-      ctx.fillStyle = p.wallShadow;
-      ctx.fillRect(px + 13, py + 9, 2, 2);
-      ctx.fillRect(px + 17, py + 9, 2, 2);
-
-      // Arched Iron Portcullis Gate
-      ctx.fillStyle = '#0d1019';
-      ctx.fillRect(px + 12, py + 17, 8, 10);
-      ctx.fillRect(px + 13, py + 16, 6, 2);
+      ctx.fillStyle = '#1e242b';
+      ctx.fillRect(4, 8, 24, 16);
+      ctx.fillStyle = '#525d69';
+      ctx.fillRect(5, 9, 22, 14);
+      ctx.fillStyle = '#7b8794';
+      ctx.fillRect(6, 9, 20, 5);
+      ctx.fillStyle = '#a6b1bc';
+      ctx.fillRect(7, 9, 18, 2);
+      ctx.fillStyle = '#090d14';
+      ctx.fillRect(8, 15, 16, 4);
       ctx.fillStyle = '#334155';
-      ctx.fillRect(px + 14, py + 17, 1, 9);
-      ctx.fillRect(px + 17, py + 17, 1, 9);
-      ctx.fillRect(px + 12, py + 20, 8, 1);
-      // Golden banner pole on spire
-      ctx.fillStyle = '#d4a345';
-      ctx.fillRect(px + 15, py + 1, 1, 8);
+      ctx.fillRect(15, 15, 2, 4);
+      ctx.fillStyle = '#36414c';
+      ctx.fillRect(11, 5, 10, 4);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(12, 5, 8, 2);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillRect(15, 1, 1, 5);
       return;
     }
 
-    // 5. THRONE: Grand Stepped Marble Dais with Crimson Carpet & Golden Royal Seal
     if (t === 'THRONE') {
-      ctx.fillStyle = '#291d2b';
-      ctx.fillRect(px + 1, py + 1, 30, 30);
-      ctx.fillStyle = '#9ca3af';
-      ctx.fillRect(px + 2, py + 2, 28, 28);
-      ctx.fillStyle = '#e5e7eb';
-      ctx.fillRect(px + 2, py + 2, 28, 2);
-      ctx.fillStyle = '#7f1d1d';
-      ctx.fillRect(px + 6, py + 3, 20, 26);
-      ctx.fillStyle = '#b91c1c';
-      ctx.fillRect(px + 8, py + 4, 16, 24);
-      ctx.fillStyle = '#d4a345';
-      ctx.fillRect(px + 7, py + 4, 1, 24);
-      ctx.fillRect(px + 24, py + 4, 1, 24);
-      ctx.fillStyle = '#78350f';
-      ctx.fillRect(px + 10, py + 4, 12, 16);
+      ctx.fillStyle = '#1f262e';
+      ctx.fillRect(1, 1, 30, 30);
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(2, 2, 28, 28);
+      ctx.fillStyle = '#64748b';
+      ctx.fillRect(3, 3, 26, 26);
       ctx.fillStyle = '#eab308';
-      ctx.fillRect(px + 11, py + 5, 10, 14);
-      ctx.fillStyle = '#fef08a';
-      ctx.fillRect(px + 12, py + 5, 8, 2);
+      ctx.fillRect(3, 3, 26, 2);
+      ctx.fillRect(3, 27, 26, 2);
+      ctx.fillStyle = '#1e293b';
+      for (let kx = 5; kx < 28; kx += 6) {
+        ctx.fillRect(kx, 3, 3, 2);
+        ctx.fillRect(kx, 27, 3, 2);
+      }
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(7, 7, 18, 17);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(8, 8, 16, 15);
       ctx.fillStyle = '#991b1b';
-      ctx.fillRect(px + 13, py + 8, 6, 8);
-      ctx.fillStyle = '#1f2937';
-      ctx.fillRect(px + 3, py + 23, 4, 5);
-      ctx.fillRect(px + 25, py + 23, 4, 5);
+      ctx.fillRect(10, 10, 12, 11);
+      ctx.fillStyle = '#facc15';
+      ctx.fillRect(14, 12, 4, 7);
+      ctx.fillRect(12, 14, 8, 3);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillRect(4, 22, 3, 5);
+      ctx.fillRect(25, 22, 3, 5);
       return;
     }
 
-    // 6. SHOP_ARMORY: Crimson-Roofed Medieval Battlefield Forge & Sword Signboard
     if (t === 'SHOP_ARMORY') {
       ctx.fillStyle = p.roadBorder;
-      this.fillPixelDisc(ctx, px + 16, py + 25, 14, 6);
+      this.fillPixelDisc(ctx, 16, 25, 14, 6);
       ctx.fillStyle = p.roadLight;
-      this.fillPixelDisc(ctx, px + 16, py + 25, 12, 4);
-      // Stone smithy base
-      ctx.fillStyle = '#1c1518';
-      ctx.fillRect(px + 3, py + 8, 26, 20);
-      ctx.fillStyle = '#786258';
-      ctx.fillRect(px + 4, py + 15, 24, 12);
-      ctx.fillStyle = '#a89080';
-      ctx.fillRect(px + 5, py + 15, 22, 3);
-      // Chimney on right
-      ctx.fillStyle = '#334155';
-      ctx.fillRect(px + 22, py + 3, 5, 10);
-      ctx.fillStyle = '#64748b';
-      ctx.fillRect(px + 23, py + 3, 3, 2);
-      // Crimson tiled pitched roof
-      ctx.fillStyle = '#7f1d1d';
-      ctx.fillRect(px + 2, py + 10, 28, 6);
-      ctx.fillStyle = '#b91c1c';
-      ctx.fillRect(px + 4, py + 7, 24, 7);
-      ctx.fillStyle = '#ef4444';
-      ctx.fillRect(px + 6, py + 5, 20, 4);
-      ctx.fillStyle = '#fca5a5';
-      ctx.fillRect(px + 8, py + 5, 16, 1);
-      // Warm forge doorway + anvil
-      ctx.fillStyle = '#1f1210';
-      ctx.fillRect(px + 11, py + 18, 10, 9);
-      ctx.fillStyle = '#f97316';
-      ctx.fillRect(px + 13, py + 20, 6, 5);
-      ctx.fillStyle = '#fef08a';
-      ctx.fillRect(px + 14, py + 21, 4, 3);
-      // Bright Golden Crossed-Sword Signboard crest on roof center
-      ctx.fillStyle = '#1c1917';
-      ctx.fillRect(px + 11, py + 7, 10, 7);
-      ctx.fillStyle = '#fbbf24';
-      ctx.fillRect(px + 12, py + 8, 8, 5);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(px + 13, py + 9, 2, 1);
-      ctx.fillRect(px + 15, py + 10, 2, 1);
-      ctx.fillRect(px + 17, py + 11, 2, 1);
-      ctx.fillRect(px + 17, py + 9, 2, 1);
-      ctx.fillRect(px + 13, py + 11, 2, 1);
+      this.fillPixelDisc(ctx, 16, 25, 12, 4);
+      ctx.fillStyle = '#18211b';
+      ctx.fillRect(3, 7, 26, 20);
+      ctx.fillStyle = '#3f5236';
+      ctx.fillRect(4, 11, 24, 15);
+      ctx.fillStyle = '#5d754e';
+      ctx.fillRect(5, 8, 22, 7);
+      ctx.fillStyle = '#849e72';
+      ctx.fillRect(7, 8, 18, 2);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(9, 17, 14, 9);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(10, 20, 5, 5);
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(16, 21, 5, 4);
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(10, 9, 12, 6);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(11, 10, 10, 4);
       return;
     }
 
-    // 7. SHOP_VENDOR: Emerald-Gold Secret Merchant Pavilion & Mystic Potion Signboard
     if (t === 'SHOP_VENDOR') {
       ctx.fillStyle = p.roadBorder;
-      this.fillPixelDisc(ctx, px + 16, py + 25, 14, 6);
+      this.fillPixelDisc(ctx, 16, 25, 14, 6);
       ctx.fillStyle = p.roadLight;
-      this.fillPixelDisc(ctx, px + 16, py + 25, 12, 4);
-      // Timber counter & goods shadow
-      ctx.fillStyle = '#0c1f1a';
-      ctx.fillRect(px + 3, py + 8, 26, 20);
-      ctx.fillStyle = '#5c3c22';
-      ctx.fillRect(px + 4, py + 16, 24, 11);
-      ctx.fillStyle = '#92400e';
-      ctx.fillRect(px + 5, py + 20, 22, 6);
-      // Potion bottles & magic scrolls displayed on counter
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillRect(px + 7, py + 17, 3, 3);
-      ctx.fillStyle = '#f43f5e';
-      ctx.fillRect(px + 12, py + 17, 3, 3);
-      ctx.fillStyle = '#fef08a';
-      ctx.fillRect(px + 17, py + 17, 4, 3);
-      ctx.fillStyle = '#a855f7';
-      ctx.fillRect(px + 22, py + 17, 3, 3);
-      // Emerald & antique-gold striped pavilion canopy
-      ctx.fillStyle = '#065f46';
-      ctx.fillRect(px + 2, py + 9, 28, 7);
-      ctx.fillStyle = '#10b981';
-      ctx.fillRect(px + 4, py + 6, 24, 8);
-      // Gold canopy stripes
-      ctx.fillStyle = '#fbbf24';
-      ctx.fillRect(px + 6, py + 6, 4, 9);
-      ctx.fillRect(px + 14, py + 5, 4, 10);
-      ctx.fillRect(px + 22, py + 6, 4, 9);
-      ctx.fillStyle = '#fef08a';
-      ctx.fillRect(px + 6, py + 5, 20, 1);
-      // Hanging emerald crystal lantern bracket
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(px + 13, py + 8, 6, 6);
-      ctx.fillStyle = '#34d399';
-      ctx.fillRect(px + 14, py + 9, 4, 4);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(px + 15, py + 10, 2, 2);
+      this.fillPixelDisc(ctx, 16, 25, 12, 4);
+      ctx.fillStyle = '#1c241b';
+      ctx.fillRect(3, 8, 26, 19);
+      ctx.fillStyle = '#687556';
+      ctx.fillRect(4, 14, 24, 12);
+      ctx.fillStyle = '#8c9b78';
+      ctx.fillRect(3, 8, 26, 7);
+      ctx.fillStyle = '#b8c4a5';
+      ctx.fillRect(5, 7, 22, 3);
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(11, 17, 10, 9);
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(11, 8, 10, 7);
+      ctx.fillStyle = '#dc2626';
+      ctx.fillRect(15, 9, 2, 5);
+      ctx.fillRect(13, 10, 6, 3);
+    }
+  }
+
+  /**
+   * Native 192x192 pixel micro-detailing pass: adds crisp 2px steel rivets, tank track impressions,
+   * corrugated hangar ribs, barbed wire / sandbag seams, and fine foliage highlights!
+   */
+  private bakeMicroDetail192(
+    ctx: CanvasRenderingContext2D,
+    t: TerrainType,
+    _mask: number,
+    variant: number,
+    p: BiomePalette
+  ) {
+    if (t === 'BRIDGE') {
+      // Fine 2px steel girder rivets along upper & lower bridge beams + plank woodgrain lines
+      for (let rx = 8; rx < 186; rx += 14) {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(rx, 21, 3, 3);
+        ctx.fillRect(rx, 161, 3, 3);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(rx, 21, 2, 2);
+        ctx.fillRect(rx, 161, 2, 2);
+      }
+      ctx.fillStyle = 'rgba(41, 26, 16, 0.35)';
+      for (let px = 12; px < 180; px += 15) {
+        ctx.fillRect(px, 40, 2, 112);
+      }
+    } else if (t === 'ROAD') {
+      // Subtle armored tank track tread marks along battlefield roads
+      ctx.fillStyle = 'rgba(30, 24, 18, 0.22)';
+      for (let tx = 14 + (variant % 3) * 4; tx < 178; tx += 12) {
+        ctx.fillRect(tx, 58, 6, 3);
+        ctx.fillRect(tx, 130, 6, 3);
+      }
+    } else if (t === 'FORT') {
+      // Heavy machine-gun barrel tip inside pillbox slit + concrete formwork bolt holes + sandbag seams
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(62, 98, 18, 4);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillRect(64, 98, 14, 2);
+      ctx.fillStyle = '#1e293b';
+      for (let bx = 38; bx <= 152; bx += 22) {
+        ctx.fillRect(bx, 66, 3, 3);
+        ctx.fillRect(bx, 124, 3, 3);
+      }
+    } else if (t === 'SHOP_ARMORY') {
+      // Corrugated steel roof ribs on forward munitions depot
+      ctx.fillStyle = 'rgba(24, 33, 27, 0.35)';
+      for (let rx = 34; rx <= 156; rx += 10) {
+        ctx.fillRect(rx, 50, 2, 38);
+      }
+    } else if (t === 'FOREST') {
+      // Soft rounded sunlit leaf clusters on forest canopy
+      ctx.fillStyle = p.treeSpec;
+      ctx.globalAlpha = 0.36;
+      for (let i = 0; i < 3; i++) {
+        const lx = 44 + ((variant * 29 + i * 37) % 104);
+        const ly = 36 + ((variant * 31 + i * 27) % 88);
+        this.fillPixelDisc(ctx, lx, ly, 7, 5);
+      }
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -1979,40 +1916,34 @@ export class TacticalBoardRenderer {
     ctx.rect(viewX, viewY, viewW, viewH);
     ctx.clip();
 
-    // 1. Blit Cached 32x32 HD-2D Pixel Terrain Atlas (viewport-culled sub-rect when zoomed!)
-    const terrainCanvas = this.ensureTerrainCache(state.grid, state.biome);
-    if (boardW <= viewW && boardH <= viewH) {
-      ctx.drawImage(terrainCanvas, offsetX, offsetY, boardW, boardH);
-    } else {
-      const visLeft = Math.max(viewX, offsetX);
-      const visTop = Math.max(viewY, offsetY);
-      const visRight = Math.min(viewX + viewW, offsetX + boardW);
-      const visBottom = Math.min(viewY + viewH, offsetY + boardH);
-      const visW = Math.max(1, visRight - visLeft);
-      const visH = Math.max(1, visBottom - visTop);
-      const srcScaleX = terrainCanvas.width / boardW;
-      const srcScaleY = terrainCanvas.height / boardH;
-      ctx.drawImage(
-        terrainCanvas,
-        (visLeft - offsetX) * srcScaleX,
-        (visTop - offsetY) * srcScaleY,
-        visW * srcScaleX,
-        visH * srcScaleY,
-        visLeft,
-        visTop,
-        visW,
-        visH
-      );
-    }
-
     // Visible tile bounds inside viewportRect (with 1-tile safety margin)
     const minVisCol = Math.max(0, Math.floor((viewX - offsetX) / tileSize) - 1);
     const maxVisCol = Math.min(cols - 1, Math.ceil((viewX + viewW - offsetX) / tileSize) + 1);
     const minVisRow = Math.max(0, Math.floor((viewY - offsetY) / tileSize) - 1);
     const maxVisRow = Math.min(rows - 1, Math.ceil((viewY + viewH - offsetY) / tileSize) + 1);
 
-    // 2. Animated Micro-Details (water ripples, flickering fort torches/flags, throne braziers)
-    const scale = tileSize / TILE_PX;
+    // 1. Blit Cached Viewport Terrain Layer (baked from native 192x192 tile stamps in a single 1:1 draw call!)
+    const minimapCanvas = this.ensureMinimapCache(state.grid, state.biome);
+    const terrainLayer = this.ensureViewportTerrainCache(
+      state.grid,
+      state.biome,
+      palette,
+      viewX,
+      viewY,
+      viewW,
+      viewH,
+      offsetX,
+      offsetY,
+      tileSize,
+      minVisCol,
+      maxVisCol,
+      minVisRow,
+      maxVisRow
+    );
+    ctx.drawImage(terrainLayer, viewX, viewY);
+
+    // 2. Animated Micro-Details (water ripples, fort firing-slit glint, HQ beacons, depot activity)
+    const scale = tileSize / 32;
     for (let y = minVisRow; y <= maxVisRow; y++) {
       for (let x = minVisCol; x <= maxVisCol; x++) {
         const t = state.grid[y][x];
@@ -2020,10 +1951,11 @@ export class TacticalBoardRenderer {
         const py = offsetY + y * tileSize;
         if (t === 'WATER' || t === 'LAVA') {
           const isLava = t === 'LAVA';
-          const wave = Math.round(Math.sin(timeSec * 2.6 + x * 0.9 + y * 0.7) * 3 * scale);
-          ctx.fillStyle = isLava ? '#ffbd38' : palette.waterFoam;
-          ctx.fillRect(px + 6 * scale + wave, py + 10 * scale, 7 * scale, Math.max(1.5, 1.5 * scale));
-          ctx.fillRect(px + 15 * scale - wave, py + 21 * scale, 5 * scale, Math.max(1.5, 1.5 * scale));
+          if (isLava || ((x * 7 + y * 13) & 3) === 0) {
+            const wave = Math.round(Math.sin(timeSec * 2.1 + x * 0.8 + y * 0.6) * 2.5 * scale);
+            ctx.fillStyle = isLava ? '#ffbd38' : 'rgba(186, 230, 253, 0.44)';
+            ctx.fillRect(px + 8 * scale + wave, py + 14 * scale, 9 * scale, Math.max(1.5, 1.4 * scale));
+          }
         } else if (t === 'FORT') {
           // Flickering amber torchlight + fluttering crimson-gold banner pennant
           const flick = Math.sin(timeSec * 11 + x * 3 + y) > 0;
@@ -2257,7 +2189,7 @@ export class TacticalBoardRenderer {
     // 10. Interactive Tactical Corner Minimap (projects live terrain cache + unit & throne beacons + camera viewport box)
     this.drawMinimap(
       ctx,
-      terrainCanvas,
+      minimapCanvas,
       state,
       canvasWidth,
       topSafe,
@@ -2651,9 +2583,9 @@ export class TacticalBoardRenderer {
       ctx.fillRect(px + 2, py + 2, size - 4, size - 4);
     }
 
-    // Resolve active 4-frame sprite-sheet cell (idle breathing / selected ready / walk cycle)
+    // Resolve active 4-frame cell lazily (idle breathing / selected ready / walk cycle)
     const anim = computeUnitAnimationFrame(unit, timeSec, isSelected, isWalking);
-    const sheet = getUnitSpriteSheet(unit, false);
+    const frameCanvas = getUnitSpriteCanvas(unit, anim.col, false, anim.state);
 
     // Resolve high-tier Title Foot Aura (RARE / EPIC / MYTHIC)
     const titleAura = computeTitleAuraVisual(unit, timeSec);
@@ -2711,26 +2643,27 @@ export class TacticalBoardRenderer {
     ctx.fill();
     ctx.restore();
 
-    // 2.5D HD-2D 64x72 sprite scale: boots at y=65/72 plant cleanly onto shadowCy!
+    // 2.5D Ultra-HD 192x192 sprite scale: ground/waterline at y=180/192 plants cleanly onto shadowCy!
     const tierScaleBoost =
-      unit.tier >= 4 ? 1.45 : unit.tier === 3 ? 1.37 : unit.tier === 2 ? 1.31 : 1.26;
+      unit.tier >= 4 ? 1.62 : unit.tier === 3 ? 1.55 : unit.tier === 2 ? 1.48 : 1.42;
     const baseSpriteW = Math.round(size * tierScaleBoost);
     const baseSpriteH = Math.round((anim.sh / anim.sw) * baseSpriteW);
     const spriteW = Math.round(baseSpriteW * anim.breathScaleX);
     const spriteH = Math.round(baseSpriteH * anim.breathScaleY);
     const drawX = Math.round(px + (size - spriteW) / 2);
-    const bootInset = Math.round(spriteH * (7 / 72));
+    const bootInset = Math.round(spriteH * (12 / SPRITE_H));
     const drawY = Math.round(shadowCy + 2 - (spriteH - bootInset) + anim.offsetY);
 
     ctx.save();
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     // Enemies face left toward Valoria heroes, Players face right!
     if (unit.faction === 'ENEMY') {
       ctx.translate(drawX + spriteW, drawY);
       ctx.scale(-1, 1);
-      ctx.drawImage(sheet.canvas, anim.sx, anim.sy, anim.sw, anim.sh, 0, 0, spriteW, spriteH);
+      ctx.drawImage(frameCanvas, 0, 0, anim.sw, anim.sh, 0, 0, spriteW, spriteH);
     } else {
-      ctx.drawImage(sheet.canvas, anim.sx, anim.sy, anim.sw, anim.sh, drawX, drawY, spriteW, spriteH);
+      ctx.drawImage(frameCanvas, 0, 0, anim.sw, anim.sh, drawX, drawY, spriteW, spriteH);
     }
     ctx.restore();
 

@@ -26,7 +26,7 @@ export function PauseModal({
     >
       <div className="w-full max-w-md tactical-panel p-6">
         <div className="text-xs font-mono-num text-amber-400">
-          {meta.subtitle} · Bản đồ {meta.id}/120
+          {meta.historicalDate} · Trận {meta.id}/200
         </div>
         <h2 className="font-display text-2xl font-bold text-amber-100 mt-0.5">Tạm Dừng</h2>
         <p className="text-xs text-slate-400 mt-1">{meta.title}</p>
@@ -137,13 +137,13 @@ export function OutcomeModal({
   onReturnTitle,
 }: OutcomeModalProps) {
   const isVictory = outcome === 'VICTORY';
-  const isFinalMap = meta.id >= 120;
+  const isFinalMap = meta.id >= 200;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={isVictory ? 'Chiến thắng bản đồ' : 'Thất bại'}
+      aria-label={isVictory ? 'Chiến thắng mặt trận' : 'Thất bại'}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
     >
       <div className="w-full max-w-xl tactical-panel p-6 md:p-7">
@@ -152,7 +152,7 @@ export function OutcomeModal({
             isVictory ? 'text-amber-400' : 'text-red-400'
           }`}
         >
-          {meta.chapterCode} · {meta.subtitle} · Bản đồ {meta.id}/120
+          {meta.chapterCode} · {meta.historicalDate} · Trận {meta.id}/200
         </div>
         <h2
           className={`font-display text-3xl font-bold mt-1 ${
@@ -161,7 +161,9 @@ export function OutcomeModal({
         >
           {isVictory
             ? isFinalMap
-              ? 'Đại Khải Hoàn Aethelis'
+              ? 'Toàn Thắng Hai Cuộc Thế Chiến (1914–1945)'
+              : meta.id === 100
+              ? 'Kết Thúc Thế Chiến I · Bước Vào Thế Chiến II'
               : 'Chiến Thắng'
             : 'Chiến Trận Thất Bại'}
         </h2>
@@ -189,7 +191,7 @@ export function OutcomeModal({
               {isVictory ? 'Tiến Độ' : 'Đồng Minh'}
             </div>
             <div className="text-xl font-bold text-emerald-300 mt-0.5">
-              {isVictory ? `${clearedMapsCount}/120` : `${alliesRemaining}/${totalAllies}`}
+              {isVictory ? `${clearedMapsCount}/200` : `${alliesRemaining}/${totalAllies}`}
             </div>
           </div>
         </div>
@@ -199,7 +201,7 @@ export function OutcomeModal({
           <div className="mt-3 p-3 bg-amber-950/35 border border-amber-400/40 text-xs flex flex-wrap items-center gap-x-4 gap-y-1 font-mono-num">
             {goldEarned > 0 && (
               <span className="text-amber-300 font-bold">
-                + {goldEarned.toLocaleString('vi-VN')} Vàng chiến lợi phẩm
+                + {goldEarned.toLocaleString('vi-VN')} G Ngân sách chiến phí
               </span>
             )}
             {rewardNotes.map((note, idx) => (
@@ -218,7 +220,7 @@ export function OutcomeModal({
               onClick={onNextMap}
               className="flex-1 py-3 px-4 text-sm font-semibold bg-amber-600 hover:bg-amber-500 text-slate-950 border border-amber-300/80 cursor-pointer whitespace-nowrap"
             >
-              Bản Đồ Tiếp Theo ({meta.id + 1}/120)
+              Trận Tiếp Theo ({meta.id + 1}/200)
             </button>
           ) : (
             <button
@@ -227,7 +229,7 @@ export function OutcomeModal({
               onClick={onRetryMap}
               className="flex-1 py-3 px-4 text-sm font-semibold bg-amber-600 hover:bg-amber-500 text-slate-950 border border-amber-300/80 cursor-pointer whitespace-nowrap"
             >
-              {isVictory ? 'Chơi Lại Bản Đồ Cuối' : 'Thử Lại Bản Đồ'}
+              {isVictory ? 'Chơi Lại Trận Cuối' : 'Thử Lại Mặt Trận'}
             </button>
           )}
 
@@ -238,7 +240,7 @@ export function OutcomeModal({
               onClick={onOpenCampConvoy}
               className="py-3 px-4 text-sm font-semibold bg-sky-800/90 hover:bg-sky-700 text-sky-100 border border-sky-400/65 cursor-pointer whitespace-nowrap"
             >
-              Kho Quân Đoàn &amp; Doanh Trại
+              Kho Quân Đoàn &amp; Căn Cứ
             </button>
           )}
 
@@ -248,7 +250,7 @@ export function OutcomeModal({
               onClick={onOpenCampShop}
               className="py-3 px-4 text-sm font-semibold bg-emerald-800/85 hover:bg-emerald-700 text-emerald-100 border border-emerald-400/60 cursor-pointer whitespace-nowrap"
             >
-              Ghé Quân Nhu Doanh Trại
+              Quân Nhu Hậu Phương
             </button>
           )}
 
@@ -257,7 +259,7 @@ export function OutcomeModal({
             onClick={onOpenAtlas}
             className="py-3 px-4 text-sm font-medium bg-[#182032] hover:bg-[#232f48] text-amber-100 border border-amber-500/40 cursor-pointer whitespace-nowrap"
           >
-            120 Bản Đồ
+            200 Trận Lịch Sử
           </button>
 
           <button

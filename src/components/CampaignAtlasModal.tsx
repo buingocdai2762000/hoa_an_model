@@ -1,7 +1,15 @@
 import { useRef, useState } from 'react';
-import { CAMPAIGN_ACTS, CAMPAIGN_MAPS, getMapScaleLabel, getObjectiveLabel } from '../game/campaignData';
+import {
+  CAMPAIGN_ACTS,
+  CAMPAIGN_MAPS,
+  getCampaignMapById,
+  getMapScaleLabel,
+  getObjectiveLabel,
+  TOTAL_CAMPAIGN_MAPS,
+  WW1_LAST_MAP_ID,
+} from '../game/campaignData';
 import { exportSaveToJson, parseImportedSave } from '../game/storage';
-import type { CampaignSaveData } from '../game/types';
+import type { CampaignEra, CampaignSaveData } from '../game/types';
 
 interface CampaignAtlasModalProps {
   saveData: CampaignSaveData;
@@ -18,13 +26,26 @@ export function CampaignAtlasModal({
   onImportSave,
   onClose,
 }: CampaignAtlasModalProps) {
-  const initialAct = Math.ceil(currentMapId / 12);
-  const [selectedAct, setSelectedAct] = useState(initialAct);
+  const currentMeta = getCampaignMapById(currentMapId);
+  const [selectedEra, setSelectedEra] = useState<CampaignEra>(currentMeta.era);
+  const [selectedAct, setSelectedAct] = useState(currentMeta.actNumber);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const act = CAMPAIGN_ACTS[selectedAct - 1];
-  const actMaps = CAMPAIGN_MAPS.filter((m) => m.actNumber === selectedAct);
+  const eraActs = CAMPAIGN_ACTS.filter((a) => a.era === selectedEra);
+  const act = CAMPAIGN_ACTS[selectedAct - 1] ?? eraActs[0];
+  const actMaps = CAMPAIGN_MAPS.filter((m) => m.actNumber === act.actNumber);
+
+  const ww1Cleared = saveData.clearedMaps.filter((id) => id <= WW1_LAST_MAP_ID).length;
+  const ww2Cleared = saveData.clearedMaps.filter((id) => id > WW1_LAST_MAP_ID).length;
+
+  const handleSelectEra = (era: CampaignEra) => {
+    setSelectedEra(era);
+    const firstActInEra = CAMPAIGN_ACTS.find((a) => a.era === era);
+    if (firstActInEra) {
+      setSelectedAct(firstActInEra.actNumber);
+    }
+  };
 
   const handleExport = () => {
     const json = exportSaveToJson(saveData);
@@ -32,7 +53,7 @@ export function CampaignAtlasModal({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `huyet-an-save-map-${saveData.highestReachedMap}.json`;
+    a.download = `hoa-an-dai-chien-save-map-${saveData.highestReachedMap}.json`;
     a.click();
     URL.revokeObjectURL(url);
     setImportFeedback('Đã xuất tệp lưu tiến độ (.json) cho PC.');
@@ -46,7 +67,9 @@ export function CampaignAtlasModal({
       const parsed = parseImportedSave(String(reader.result ?? ''));
       if (parsed) {
         onImportSave(parsed);
-        setImportFeedback(`Đã nhập tệp lưu thành công (Mở khóa tới Bản đồ ${parsed.highestReachedMap}/120).`);
+        setImportFeedback(
+          `Đã nhập tệp lưu thành công (Mở khóa tới Trận ${parsed.highestReachedMap}/${TOTAL_CAMPAIGN_MAPS}).`
+        );
       } else {
         setImportFeedback('Tệp lưu không hợp lệ. Vui lòng chọn tệp JSON do trò chơi xuất ra.');
       }
@@ -59,18 +82,18 @@ export function CampaignAtlasModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Biên Niên Sử 120 Bản Đồ"
+      aria-label="Bản Đồ 200 Trận Lịch Sử Thế Chiến I và II"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 md:p-6"
     >
-      <div className="w-full max-w-5xl max-h-[88vh] tactical-panel flex flex-col overflow-hidden">
+      <div className="w-full max-w-6xl max-h-[90vh] tactical-panel flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 border-b border-amber-500/30 bg-[#0d111b]">
           <div>
             <h2 className="font-display text-xl md:text-2xl font-bold text-amber-100">
-              Biên Niên Sử 120 Bản Đồ
+              Biên Niên Sử 200 Trận Đánh · Thế Chiến I &amp; II
             </h2>
             <p className="text-xs text-slate-400 mt-0.5 font-mono-num">
-              Tiến độ chiến dịch: Đã mở khóa {saveData.highestReachedMap}/120 · Đã chinh phục {saveData.clearedMaps.length}/120 bản đồ
+              Mở khóa {saveData.highestReachedMap}/{TOTAL_CAMPAIGN_MAPS} · Thế Chiến I: {ww1Cleared}/100 · Thế Chiến II: {ww2Cleared}/100
             </p>
           </div>
 
@@ -113,12 +136,48 @@ export function CampaignAtlasModal({
           </div>
         )}
 
-        {/* 10 Act Tabs */}
-        <div className="flex items-center gap-1 px-4 py-2.5 overflow-x-auto border-b border-slate-800 bg-[#111624] chronicle-scroll">
-          {CAMPAIGN_ACTS.map((item) => {
-            const firstMapId = (item.actNumber - 1) * 12 + 1;
+        {/* Two Connected Grand Campaign Parts Switcher (Part I: WWI 1-100, Part II: WWII 101-200) */}
+        <div className="grid grid-cols-2 border-b border-amber-500/30 bg-[#0b101a]">
+          <button
+            type="button"
+            data-testid="atlas-era-ww1"
+            onClick={() => handleSelectEra('WW1')}
+            className={`px-5 py-3 text-left transition-colors cursor-pointer border-r border-slate-800 ${
+              selectedEra === 'WW1'
+                ? 'bg-amber-600/20 text-amber-100 border-b-2 border-b-amber-400'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-[#131a2a]'
+            }`}
+          >
+            <div className="text-xs font-mono-num text-amber-400">PHẦN I · 1914 — 1918 · TRẬN 1–100</div>
+            <div className="font-display text-base font-bold mt-0.5">
+              Thế Chiến Thứ Nhất ({ww1Cleared}/100)
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="atlas-era-ww2"
+            onClick={() => handleSelectEra('WW2')}
+            className={`px-5 py-3 text-left transition-colors cursor-pointer ${
+              selectedEra === 'WW2'
+                ? 'bg-sky-600/20 text-sky-100 border-b-2 border-b-sky-400'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-[#131a2a]'
+            }`}
+          >
+            <div className="text-xs font-mono-num text-sky-400">PHẦN II · 1937 — 1945 · TRẬN 101–200</div>
+            <div className="font-display text-base font-bold mt-0.5">
+              Thế Chiến Thứ Hai ({ww2Cleared}/100)
+            </div>
+          </button>
+        </div>
+
+        {/* 8 Act Tabs for Active Era */}
+        <div className="flex items-center gap-1.5 px-4 py-2.5 overflow-x-auto border-b border-slate-800 bg-[#111624] chronicle-scroll">
+          {eraActs.map((item) => {
+            const actFirstMap = CAMPAIGN_MAPS.find((m) => m.actNumber === item.actNumber);
+            const firstMapId = actFirstMap?.id ?? 1;
             const isUnlocked = saveData.highestReachedMap >= firstMapId;
-            const isActive = selectedAct === item.actNumber;
+            const isActive = act.actNumber === item.actNumber;
             return (
               <button
                 key={item.actNumber}
@@ -126,13 +185,15 @@ export function CampaignAtlasModal({
                 onClick={() => setSelectedAct(item.actNumber)}
                 className={`px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 border ${
                   isActive
-                    ? 'bg-amber-600 text-slate-950 border-amber-300'
+                    ? selectedEra === 'WW1'
+                      ? 'bg-amber-600 text-slate-950 border-amber-300'
+                      : 'bg-sky-500 text-slate-950 border-sky-200'
                     : isUnlocked
                     ? 'bg-[#181f30] text-amber-100 border-amber-500/30 hover:bg-[#222c44]'
                     : 'bg-[#111520] text-slate-500 border-slate-800 hover:text-slate-300'
                 }`}
               >
-                Hồi {item.roman}
+                Hồi {item.roman} · {item.historicalYear}
               </button>
             );
           })}
@@ -142,16 +203,16 @@ export function CampaignAtlasModal({
         <div className="px-6 py-3.5 border-b border-slate-800/80 bg-[#121827]">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="font-display text-lg font-bold text-amber-200">
-              Hồi {act.roman}: {act.title}
+              Hồi {act.roman}: {act.title} ({act.historicalYear})
             </h3>
             <span className="text-xs text-slate-400">
-              Vùng đất: {act.regionName} · Trùm chính: {act.antagonist}
+              Mặt trận: {act.regionName} · Chỉ huy đối phương: {act.antagonist}
             </span>
           </div>
           <p className="text-xs md:text-sm text-slate-300 mt-1 leading-relaxed">{act.synopsis}</p>
         </div>
 
-        {/* 12 Maps Grid for Active Act */}
+        {/* Historical Battles Grid for Active Act */}
         <div className="flex-1 overflow-y-auto p-5 chronicle-scroll">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {actMaps.map((m) => {
@@ -175,7 +236,7 @@ export function CampaignAtlasModal({
                 >
                   <div className="flex items-center justify-between gap-2 text-xs font-mono-num">
                     <span className={isLocked ? 'text-slate-500' : 'text-amber-400 font-semibold'}>
-                      {m.chapterCode} · Bản đồ {m.id}/120
+                      Trận {m.id}/{TOTAL_CAMPAIGN_MAPS} · {m.historicalDate}
                     </span>
                     <span
                       className={
@@ -186,19 +247,19 @@ export function CampaignAtlasModal({
                           : 'text-sky-300'
                       }
                     >
-                      {isCleared ? 'Đã hoàn thành' : isLocked ? 'Chưa mở khóa' : 'Sẵn sàng'}
+                      {isCleared ? 'Đã thắng' : isLocked ? 'Khóa' : 'Sẵn sàng'}
                     </span>
                   </div>
 
                   <div className="font-semibold text-sm mt-1 truncate">{m.title}</div>
                   <div className="text-[11px] text-amber-200/85 mt-0.5 truncate">
-                    {m.storyArcBeat} · {getObjectiveLabel(m)}
+                    {m.alliedCommander} vs {m.axisCommander} · {getObjectiveLabel(m)}
                   </div>
                   <div className="text-[11px] text-slate-400 mt-1.5 line-clamp-2 leading-snug">
-                    <span className="text-sky-300/90">Liên kết:</span> {m.previousMapLink}
+                    <span className="text-sky-300/90">Lực lượng:</span> {m.forceSummary}
                   </div>
                   <div className="text-[11px] font-mono-num text-slate-400 mt-1.5">
-                    {getMapScaleLabel(m.mapWidth, m.mapHeight)} ({m.mapWidth}×{m.mapHeight}) · Tối đa {m.maxDeploySlots} tướng · Cấp {m.recommendedLevel} · {m.bossName}
+                    {getMapScaleLabel(m.mapWidth, m.mapHeight)} ({m.mapWidth}×{m.mapHeight}) · {m.maxDeploySlots} đơn vị · Lv.{m.recommendedLevel}
                   </div>
                 </button>
               );

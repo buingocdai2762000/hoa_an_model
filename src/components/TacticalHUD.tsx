@@ -362,12 +362,12 @@ export function TacticalHUD({
               e.currentTarget.blur();
               onOpenAtlas();
             }}
-            title="Mở Biên Niên Sử 120 Bản Đồ"
-            aria-label="Mở Biên Niên Sử 120 Bản Đồ"
+            title="Mở Bản Đồ 200 Trận Lịch Sử"
+            aria-label="Mở Bản Đồ 200 Trận Lịch Sử"
             className="h-9 px-2.5 flex items-center gap-1.5 text-xs font-medium bg-[#151c2c] hover:bg-[#1e2940] text-amber-200 border border-amber-500/40 cursor-pointer whitespace-nowrap"
           >
             <MapIcon className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">120 Maps</span>
+            <span className="hidden md:inline">200 Trận</span>
           </button>
 
           <button
@@ -929,7 +929,7 @@ export function TacticalHUD({
               </div>
             ) : (
               <div className="text-[10px] text-slate-400 mt-0.5">
-                Kiếm &gt; Rìu &gt; Thương &gt; Kiếm
+                Bộ Binh &gt; Hạng Nặng &gt; Xuyên Giáp &gt; Bộ Binh
               </div>
             )}
           </div>

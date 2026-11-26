@@ -6,7 +6,11 @@ export type WeaponType = 'SWORD' | 'LANCE' | 'AXE' | 'BOW' | 'TOME' | 'STAFF';
 
 export type MagicElement = 'NONE' | 'FIRE' | 'THUNDER' | 'WIND' | 'ICE' | 'LIGHT' | 'DARK';
 
-export type MoveType = 'FOOT' | 'MOUNTED' | 'FLYING' | 'ARMORED';
+export type MoveType = 'FOOT' | 'MOUNTED' | 'FLYING' | 'ARMORED' | 'NAVAL';
+
+export type UnitDomain = 'INFANTRY' | 'ARMOR' | 'ARTILLERY' | 'AIRCRAFT' | 'NAVAL';
+
+export type CampaignEra = 'WW1' | 'WW2';
 
 export type UnitTier = 1 | 2 | 3 | 4;
 
@@ -498,8 +502,10 @@ export interface DialogueLine {
 }
 
 export interface ActDefinition {
-  actNumber: number; // 1..10
+  actNumber: number; // 1..16
   roman: string;
+  era: CampaignEra;
+  historicalYear: string;
   title: string;
   regionName: string;
   biome: BiomeId;
@@ -509,11 +515,32 @@ export interface ActDefinition {
   recruitedHeroId?: string;
 }
 
+export type TheaterProfile =
+  | 'FORTRESS_SIEGE'
+  | 'TRENCH_FRONT'
+  | 'RIVER_CANAL'
+  | 'FLEET_NAVAL'
+  | 'AMPHIBIOUS_LANDING'
+  | 'MOUNTAIN_WINTER'
+  | 'DESERT_MOBILE'
+  | 'AIR_DEFENSE'
+  | 'ARMORED_CLASH'
+  | 'AIRBORNE_BRIDGE'
+  | 'URBAN_ASSAULT'
+  | 'JUNGLE_ISLAND';
+
 export interface CampaignMapMeta {
-  id: number; // 1..120
-  actNumber: number; // 1..10
-  chapterInAct: number; // 1..12
-  chapterCode: string; // e.g. "I-1", "IV-7"
+  id: number; // 1..200
+  actNumber: number; // 1..16
+  chapterInAct: number; // 1..13
+  chapterCode: string; // e.g. "I-1", "IX-1", "XVI-13"
+  era: CampaignEra;
+  historicalYear: string;
+  historicalDate?: string;
+  alliedCommander?: string;
+  axisCommander?: string;
+  forceSummary?: string;
+  theaterProfile?: TheaterProfile;
   title: string;
   subtitle: string;
   storyArcBeat: string; // Role of this battle inside the Act's continuous plot

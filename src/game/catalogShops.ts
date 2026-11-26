@@ -1,14 +1,18 @@
+import { CAMPAIGN_MAPS } from './campaignData';
 import { ITEMS } from './catalogItems';
 import { WEAPONS } from './catalogWeapons';
 import { ARMOR_TEMPLATE_LIST, GEM_LIST } from './equipmentSystem';
 import type { BiomeId, GameItem, ShopKind, ShopStock, Weapon } from './types';
 
 function actFromMap(mapId: number): number {
-  return Math.max(1, Math.min(10, Math.ceil(mapId / 12)));
+  const meta = CAMPAIGN_MAPS[mapId - 1];
+  if (meta) return meta.actNumber;
+  if (mapId <= 96) return Math.max(1, Math.min(8, Math.ceil(mapId / 12)));
+  return Math.max(9, Math.min(16, 8 + Math.ceil((mapId - 96) / 13)));
 }
 
 /**
- * Deterministic biome bonus weapon picks so each region's in-map shops feel distinct and thematic.
+ * Deterministic theater bonus weapon picks so each WWI/WWII frontline depot feels authentic.
  */
 const BIOME_ARMORY_SPECIALS: Record<BiomeId, string[]> = {
   VALORIA_PLAINS: ['rapier_valoria', 'ridersbane', 'short_bow', 'wind_edge'],
@@ -37,20 +41,19 @@ const BIOME_VENDOR_SPECIALS: Record<BiomeId, string[]> = {
 };
 
 /**
- * Computes the exact Shop inventory for:
- * 1) CAMP_BAZAAR (Ngoài màn chơi — Quân Nhu Doanh Trại): Standard army weapons, basic tomes, healing potions, basic seals & scrolls.
- * 2) IN_MAP_ARMORY (Trong màn chơi — Tiệm Rèn Chiến Trường): Exclusive Killer, Anti-Armor/Cavalry/Flying, 1–2 range physical, Brave & Tier-IV weapons + Combat Tonics/STR-SKL-DEF boosters.
- * 3) IN_MAP_VENDOR (Trong màn chơi — Thương Nhân Bí Mật): Exclusive Arcane Tomes, Magic Blades/Bows, Long-Range Staves, Permanent Stat Boosters (Swift Boots, Seraph Robe, Speedwing...), Mythic Crowns & High EXP Codices.
+ * Computes Shop inventory across 16 Acts / 200 Battles (WWI Acts 1..8 -> WWII Acts 9..16):
+ * 1) CAMP_BAZAAR (Ngoài trận — Quân Nhu Bộ Tư Lệnh)
+ * 2) IN_MAP_ARMORY (Trong trận — Kho Quân Giới Tiền Phương)
+ * 3) IN_MAP_VENDOR (Trong trận — Trạm Tiếp Vận Đặc Nhiệm)
  */
 export function getShopStock(kind: ShopKind, mapId: number, biome: BiomeId): ShopStock {
   const act = actFromMap(mapId);
-  const maxUnlockedTier = act >= 8 ? 4 : act >= 5 ? 3 : act >= 2 ? 2 : 2;
+  const maxUnlockedTier = act >= 13 ? 4 : act >= 9 ? 3 : act >= 3 ? 2 : 2;
   const allWeapons = Object.values(WEAPONS);
   const allItems = Object.values(ITEMS);
 
   if (kind === 'CAMP_BAZAAR') {
-    // Out-of-map Camp Shop: Standard reliable CAMP gear only (never sells In-Map exclusive Killer/Brave/Stat Boosters)
-    const campMaxTier = act >= 6 ? 3 : act >= 3 ? 2 : 1;
+    const campMaxTier = act >= 10 ? 3 : act >= 4 ? 2 : 1;
     const weaponIds = allWeapons
       .filter((w) => w.shopTag === 'CAMP' && w.tier <= campMaxTier)
       .sort((a, b) => a.tier - b.tier || a.price - b.price)
@@ -78,12 +81,12 @@ export function getShopStock(kind: ShopKind, mapId: number, biome: BiomeId): Sho
 
     return {
       kind,
-      title: 'Quân Nhu Doanh Trại',
-      subtitle: 'Cửa Hàng Ngoài Màn Chơi — Chuẩn Bị Quân Trang, Giáp & Bảo Ngọc',
-      badgeText: 'NGOÀI MÀN CHƠI',
+      title: 'Quân Nhu Bộ Tư Lệnh',
+      subtitle: 'Hậu Cần Ngoài Trận — Vũ Khí Biên Chế, Quân Trang & Vật Tư Xưởng Quân Giới',
+      badgeText: 'NGOÀI TRẬN · BỘ TƯ LỆNH',
       accentColor: '#f59e0b',
       exclusivityNote:
-        'Bán vũ khí tiêu chuẩn, bộ 5 giáp cơ bản, nguyên liệu Lò Rèn (Đá Tôi Luyện, Tinh Thiết, Tinh Thể Hợp Nhất) và Bảo Ngọc sơ cấp. Giáp & Ngọc Thần Thoại xuất hiện tại Cửa Hàng TRONG MÀN CHƠI!',
+        'Cung cấp súng pháo tiêu chuẩn, bộ 5 khí tài cơ bản, vật liệu Xưởng Quân Giới (Thép Vonfram, Phôi Thép Cán, Bản Vẽ Cải Tiến) và Mô-đun sơ cấp. Vũ khí Đặc Chủng & Radar Tối Tân mở bán tại Kho Tiền Phương TRONG TRẬN!',
       weaponIds,
       itemIds,
       armorIds,
@@ -98,7 +101,6 @@ export function getShopStock(kind: ShopKind, mapId: number, biome: BiomeId): Sho
       .sort((a, b) => a.tier - b.tier || a.price - b.price)
       .map((w) => w.id);
 
-    // Always put biome specials at top (even 1 tier ahead as a battlefield discovery reward!)
     const weaponIds = Array.from(new Set([...specials, ...pool])).slice(0, 26);
 
     const itemIds = allItems
@@ -122,12 +124,12 @@ export function getShopStock(kind: ShopKind, mapId: number, biome: BiomeId): Sho
 
     return {
       kind,
-      title: 'Tiệm Rèn Chiến Trường',
-      subtitle: `Cửa Hàng Trong Màn ${mapId} — Vũ Khí & Trọng Giáp Độc Quyền`,
-      badgeText: 'TRONG MÀN CHƠI · RÈN',
+      title: 'Kho Quân Giới Tiền Phương',
+      subtitle: `Tiếp Vận Trận ${mapId}/200 — Vũ Khí Chống Tăng, Phòng Không & Liên Thanh`,
+      badgeText: 'TRONG TRẬN · QUÂN GIỚI',
       accentColor: '#f43f5e',
       exclusivityNote:
-        'Độc quyền thực địa! Bán vũ khí Phá Giáp/Sát Thủ/Song Kích, Giáp Bậc II–III, Kim Cương Hộ Thể và nguyên liệu Tôi Luyện không có ở Doanh Trại.',
+        'Độc quyền thực địa! Cung cấp Bazooka/Panzerfaust, Pháo Phòng Không Bofors/Flak 88, Tiểu liên liên thanh PPSh/MG-42 và Giáp Thép Cán không bán ở Căn Cứ.',
       weaponIds,
       itemIds,
       armorIds,
@@ -165,12 +167,12 @@ export function getShopStock(kind: ShopKind, mapId: number, biome: BiomeId): Sho
 
   return {
     kind,
-    title: 'Thương Nhân Bí Mật',
-    subtitle: `Cửa Hàng Trong Màn ${mapId} — Pháp Điển, Thần Giáp & Bảo Ngọc Hiếm`,
-    badgeText: 'TRONG MÀN CHƠI · BÍ MẬT',
+    title: 'Trạm Tiếp Vận Đặc Nhiệm',
+    subtitle: `Tiếp Vận Trận ${mapId}/200 — Pháo Phản Lực, Không Kích, Hải Pháo & Khí Tài Tối Mật`,
+    badgeText: 'TRONG TRẬN · ĐẶC NHIỆM',
     accentColor: '#10b981',
     exclusivityNote:
-      'Độc quyền Thương Nhân Bí Mật! Bán Pháp Điển Cao Cấp, Thần Giáp Bậc IV, Hài Thần Phong (+1 MOV), Thái Dương Thạch & Hư Không Bảo Thạch!',
+      'Độc quyền Đặc Nhiệm! Bán Dàn Katyusha, Phi Đội Stuka/B-17, Hải Pháo Hạm Đội, Ngư Lôi U-Boat, Động Cơ Merlin (+1 MOV), Ngòi Nổ VT & Radar H2X!',
     weaponIds,
     itemIds,
     armorIds,

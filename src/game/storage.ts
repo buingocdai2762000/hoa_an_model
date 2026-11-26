@@ -9,9 +9,7 @@ import {
 } from './data';
 import type { ArmorSlot, CampaignSaveData, GameSettings, Unit } from './types';
 
-const STORAGE_KEY = 'huyet_an_chronicle_save_v4';
-const LEGACY_V3_KEY = 'huyet_an_chronicle_save_v3';
-const LEGACY_V2_KEY = 'huyet_an_chronicle_save_v2';
+const STORAGE_KEY = 'huyet_an_chronicle_save_ww_v6';
 
 export const DEFAULT_SETTINGS: GameSettings = {
   muted: false,
@@ -23,7 +21,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
 export function createFreshSave(): CampaignSaveData {
   const { equipmentBag } = createStarterEquipmentBag();
   return {
-    version: 5,
+    version: 6,
     highestReachedMap: 1,
     clearedMaps: [],
     currentMapId: 1,
@@ -78,7 +76,7 @@ function hydrateSave(parsed: Partial<CampaignSaveData>): CampaignSaveData {
   const hydrated: CampaignSaveData = {
     ...fresh,
     ...parsed,
-    version: 5,
+    version: 6,
     totalCrits: typeof parsed.totalCrits === 'number' ? parsed.totalCrits : 0,
     totalPromotions: typeof parsed.totalPromotions === 'number' ? parsed.totalPromotions : 0,
     totalShopPurchases: typeof parsed.totalShopPurchases === 'number' ? parsed.totalShopPurchases : 0,
@@ -111,10 +109,7 @@ function hydrateSave(parsed: Partial<CampaignSaveData>): CampaignSaveData {
 
 export function loadCampaignSave(): CampaignSaveData | null {
   try {
-    const raw =
-      window.localStorage.getItem(STORAGE_KEY) ??
-      window.localStorage.getItem(LEGACY_V3_KEY) ??
-      window.localStorage.getItem(LEGACY_V2_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CampaignSaveData>;
     if (!parsed || typeof parsed.highestReachedMap !== 'number' || !Array.isArray(parsed.roster)) {
@@ -216,7 +211,7 @@ export function parseImportedSave(jsonText: string): CampaignSaveData | null {
       !parsed ||
       typeof parsed.highestReachedMap !== 'number' ||
       parsed.highestReachedMap < 1 ||
-      parsed.highestReachedMap > 120 ||
+      parsed.highestReachedMap > 200 ||
       !Array.isArray(parsed.roster)
     ) {
       return null;

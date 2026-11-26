@@ -127,18 +127,19 @@ const TIER_ROMAN = ['', 'I', 'II', 'III', 'IV'] as const;
 
 const TIER_VISUAL_CAPTION = [
   '',
-  'Giáp sơ cấp · Vũ khí sắt',
-  'Áo choàng · Cầu vai mạ vàng',
-  'Áo choàng Vương Giả · Vương miện · Phù văn',
-  'Cánh Thần Thoại · Hào quang · Thần khí',
+  'Trang bị chuẩn Thế Chiến I',
+  'Nâng cấp khí tài & giáp cơ giới',
+  'Phiên bản Tinh Nhuệ Thế Chiến II',
+  'Khí tài Chiến Lược Đỉnh Cao',
 ] as const;
 
 const MOVE_TYPE_LABELS: Record<'ALL' | MoveType, string> = {
   ALL: 'Tất cả (30)',
-  FOOT: 'Bộ Binh',
-  MOUNTED: 'Kỵ Binh',
-  FLYING: 'Không Kỵ',
-  ARMORED: 'Trọng Giáp',
+  FOOT: 'Bộ Binh / Pháo',
+  MOUNTED: 'Cơ Giới / Xe Tăng',
+  FLYING: 'Không Quân / Trực Thăng',
+  ARMORED: 'Tăng Hạng Nặng',
+  NAVAL: 'Hải Quân / Hạm Đội',
 };
 
 const TITLE_CATEGORY_LABELS: Record<'ALL' | TitleDef['category'], string> = {
@@ -446,11 +447,11 @@ export function RosterArmoryModal({
                       : 'bg-[#131928] hover:bg-[#192238] border-slate-700/60 text-slate-200'
                   }`}
                 >
-                  <div className="w-11 h-12 shrink-0 bg-[#0b0f19] border border-slate-700/70 flex items-center justify-center overflow-hidden">
+                  <div className="w-14 h-14 shrink-0 bg-[#0b0f19] border border-slate-700/70 flex items-center justify-center overflow-hidden">
                     <img
                       src={thumb}
                       alt={hero.name}
-                      className="w-10 h-11 object-contain pixel-art"
+                      className="w-[52px] h-[52px] object-contain pixel-art"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -498,7 +499,7 @@ export function RosterArmoryModal({
             <div className="flex flex-col min-h-0 overflow-hidden bg-[#111726]">
               {/* Top Hero Profile Strip: RPG Bust Portrait + 64x72 Full-Body HD-2D Pedestal */}
               <div className="p-4 border-b border-amber-500/25 bg-[#0d121f] flex flex-wrap items-center gap-3.5">
-                <div className="w-20 h-28 shrink-0 bg-[#080c15] border-2 border-amber-500/50 overflow-hidden relative shadow-[0_6px_16px_rgba(0,0,0,0.6)]">
+                <div className="w-28 h-28 shrink-0 bg-[#080c15] border-2 border-amber-500/50 overflow-hidden relative shadow-[0_6px_16px_rgba(0,0,0,0.6)]">
                   <img
                     src={currentPortraitUrl}
                     alt={`Chân dung ${unit.name}`}
@@ -506,11 +507,11 @@ export function RosterArmoryModal({
                     className="w-full h-full object-cover object-top pixel-art"
                   />
                 </div>
-                <div className="w-24 h-28 shrink-0 bg-[radial-gradient(circle_at_50%_72%,#1e2d4a_0%,#080c15_75%)] border-2 border-sky-400/45 flex items-center justify-center relative">
+                <div className="w-28 h-28 shrink-0 bg-[radial-gradient(circle_at_50%_72%,#1e2d4a_0%,#080c15_75%)] border-2 border-sky-400/45 flex items-center justify-center relative">
                   <img
                     src={currentSpriteUrl}
                     alt={unit.name}
-                    className="w-[82px] h-[92px] object-contain pixel-art drop-shadow-[0_4px_8px_rgba(0,0,0,0.85)]"
+                    className="w-24 h-24 object-contain pixel-art drop-shadow-[0_4px_8px_rgba(0,0,0,0.85)]"
                   />
                   <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-[#0c101b]/95 border border-amber-400/50 text-[10px] font-mono-num text-amber-200">
                     Bậc {TIER_ROMAN[unit.tier]}
@@ -1029,7 +1030,7 @@ export function RosterArmoryModal({
                     {/* Complete 4-Tier Visual Evolution Tree (Bậc I -> Lv.5 -> Lv.15 -> Lv.30) */}
                     <div className="p-3 bg-[#0c1120] border border-amber-500/35">
                       <div className="text-[11px] font-mono-num uppercase tracking-wider text-amber-300 mb-2">
-                        Lộ Trình Tiến Hóa 3 Cấp: Bậc I → Bậc II (Lv.5) → Bậc III (Lv.15) → Bậc IV Thần Thoại (Lv.30)
+                        Lộ Trình Thăng Hạng 3 Cấp: Bậc I → Bậc II (Lv.5) → Bậc III (Lv.15) → Bậc IV Tối Tân (Lv.30)
                       </div>
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 items-stretch">
                         {promotionChain.map((node, idx) => {
@@ -1079,7 +1080,7 @@ export function RosterArmoryModal({
                               </div>
 
                               <div
-                                className={`w-24 h-24 flex items-center justify-center my-1 border-2 ${
+                                className={`w-28 h-28 flex items-center justify-center my-1 border-2 ${
                                   node.tier === 4
                                     ? 'bg-gradient-to-b from-amber-950/60 via-[#150f24] to-[#080c15] border-amber-400/80 shadow-[0_0_16px_rgba(251,191,36,0.28)]'
                                     : node.tier === 3
@@ -1092,7 +1093,7 @@ export function RosterArmoryModal({
                                 <img
                                   src={previewUrl}
                                   alt={node.meta.name}
-                                  className="w-[80px] h-[88px] object-contain pixel-art"
+                                  className="w-24 h-24 object-contain pixel-art"
                                 />
                               </div>
 
@@ -1131,10 +1132,10 @@ export function RosterArmoryModal({
                       <div className="p-4 bg-[#141c2e] border border-fuchsia-400/50 text-center">
                         <Crown className="w-7 h-7 text-fuchsia-300 mx-auto mb-1.5" />
                         <div className="font-display text-base font-bold text-amber-100">
-                          {unit.name} đã đạt đỉnh cao Thần Thoại Bậc IV ({unit.className})!
+                          {unit.name} đã đạt đỉnh cao Khí Tài Tối Tân Bậc IV ({unit.className})!
                         </div>
                         <p className="text-xs text-slate-300 mt-1">
-                          Tướng đã hoàn tất cả 3 cấp tiến hóa (Lv.5 · Lv.15 · Lv.30), mở khóa trọn bộ tuyệt kỹ và vũ khí tối thượng.
+                          Sĩ quan đã hoàn tất cả 3 cấp hiện đại hóa (Lv.5 · Lv.15 · Lv.30), mở khóa trọn bộ tác chiến và khí tài chiến lược.
                         </p>
                       </div>
                     ) : (
@@ -1416,14 +1417,14 @@ export function RosterArmoryModal({
                     </div>
 
                     <div className="text-[11px] text-slate-300">
-                      Hiển thị <b className="text-amber-300">{filteredLineages.length}/30</b> hệ phái (120 lớp tiến hóa 4 bậc từ Bậc I đến Bậc IV Thần Thoại).{' '}
+                      Hiển thị <b className="text-amber-300">{filteredLineages.length}/30</b> binh chủng (120 cấp khí tài 4 bậc từ Thế Chiến I đến Chiến Tranh Hiện Đại).{' '}
                       {!unit.isLord && onReclassUnit ? (
                         <span className="text-sky-300">
-                          Có thể nhấn <b>Chuyển Hệ</b> để đổi {unit.name} sang bất kỳ hệ phái nào!
+                          Có thể nhấn <b>Chuyển Hệ</b> để đổi {unit.name} sang binh chủng phù hợp địa hình!
                         </span>
                       ) : (
                         <span className="text-slate-400">
-                          (Chọn tướng khác ngoài Lãnh Chúa {unit.name} để dùng tính năng Chuyển Hệ tự do)
+                          (Chọn sĩ quan khác ngoài Chỉ Huy Trưởng {unit.name} để dùng tính năng Chuyển Hệ)
                         </span>
                       )}
                     </div>
@@ -1432,6 +1433,10 @@ export function RosterArmoryModal({
                       {filteredLineages.map((lin, linIdx) => {
                         const t1 = lin.tiers[0];
                         const isUnitInLineage = lin.tiers.some((t) => t.id === unit.classId);
+                        const domainLockedMidBattle =
+                          !resolvedOutOfBattle &&
+                          ((unit.moveType === 'NAVAL' && lin.moveType !== 'NAVAL') ||
+                            (unit.moveType !== 'NAVAL' && lin.moveType === 'NAVAL'));
                         return (
                           <div
                             key={t1.id}
@@ -1460,17 +1465,23 @@ export function RosterArmoryModal({
                               {onReclassUnit && !unit.isLord && t1.id !== 'LORD' && (
                                 <button
                                   type="button"
-                                  disabled={isUnitInLineage}
+                                  disabled={isUnitInLineage || domainLockedMidBattle}
                                   onClick={() => onReclassUnit(unit.id, t1.id)}
-                                  className={`px-2.5 py-1 text-[11px] font-semibold border cursor-pointer flex items-center gap-1 ${
+                                  className={`px-2.5 py-1 text-[11px] font-semibold border flex items-center gap-1 ${
                                     isUnitInLineage
                                       ? 'bg-sky-900/50 text-sky-300 border-sky-400/50 cursor-default'
-                                      : 'bg-amber-600 hover:bg-amber-500 text-slate-950 border-amber-300'
+                                      : domainLockedMidBattle
+                                      ? 'bg-slate-800/70 text-slate-400 border-slate-600/50 cursor-not-allowed'
+                                      : 'bg-amber-600 hover:bg-amber-500 text-slate-950 border-amber-300 cursor-pointer'
                                   }`}
                                 >
                                   <RefreshCw className="w-3 h-3" />
                                   <span>
-                                    {isUnitInLineage ? 'Hệ hiện tại' : `Chuyển ${unit.name} sang hệ này`}
+                                    {isUnitInLineage
+                                      ? 'Hệ hiện tại'
+                                      : domainLockedMidBattle
+                                      ? 'Đổi Hải ↔ Lục ở Doanh Trại'
+                                      : `Chuyển ${unit.name} sang hệ này`}
                                   </span>
                                 </button>
                               )}
@@ -1538,7 +1549,7 @@ export function RosterArmoryModal({
                                     <img
                                       src={spriteUrl}
                                       alt={meta.name}
-                                      className="w-[68px] h-[76px] object-contain pixel-art my-1"
+                                      className="w-28 h-28 object-contain my-1"
                                     />
                                     <div className="font-display text-[11px] font-bold text-amber-100 leading-tight">
                                       {meta.name}

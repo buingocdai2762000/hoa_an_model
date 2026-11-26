@@ -346,13 +346,16 @@ export function canUnitHealAtDistance(unit: Unit, distance: number): boolean {
 
 function getEffectiveness(weapon: Weapon, target: Unit): { effective: boolean; label?: string } {
   if (weapon.effectiveVsFlying && target.moveType === 'FLYING') {
-    return { effective: true, label: 'Khắc chế Không Kỵ (×2)' };
+    return { effective: true, label: 'Khắc chế Không Quân (×2)' };
   }
   if (weapon.effectiveVsArmor && target.moveType === 'ARMORED') {
-    return { effective: true, label: 'Phá Giáp Trọng Giáp (×2)' };
+    return { effective: true, label: 'Xuyên Giáp Thiết Giáp (×2)' };
   }
-  if (weapon.effectiveVsCavalry && target.moveType === 'MOUNTED') {
-    return { effective: true, label: 'Phá Kỵ Binh (×2)' };
+  if (weapon.effectiveVsCavalry && (target.moveType === 'MOUNTED' || target.moveType === 'NAVAL')) {
+    return {
+      effective: true,
+      label: target.moveType === 'NAVAL' ? 'Phá Chiến Hạm (×2)' : 'Chống Cơ Giới (×2)',
+    };
   }
   return { effective: false };
 }
@@ -388,16 +391,16 @@ export function calculateCombatForecast(
   const attackerNotes: string[] = [];
   const defenderNotes: string[] = [];
 
-  if (skill) attackerNotes.push(`Tuyệt kỹ: ${skill.name}`);
-  if (attacker.weapon.brave) attackerNotes.push('Song Kích (×2 đòn)');
+  if (skill) attackerNotes.push(`Chiến thuật: ${skill.name}`);
+  if (attacker.weapon.brave) attackerNotes.push('Liên Thanh (×2 loạt)');
   if ((attacker.weapon.drainRatio ?? 0) > 0 || (skill?.drainRatio ?? 0) > 0) {
-    attackerNotes.push('Hấp thụ HP');
+    attackerNotes.push('Khôi phục HP');
   }
   if (atkTitle.activeTitleNames.length > 0) {
-    attackerNotes.push(`Danh hiệu: ${atkTitle.activeTitleNames[0]}`);
+    attackerNotes.push(`Huân chương: ${atkTitle.activeTitleNames[0]}`);
   }
   if (defTitle.activeTitleNames.length > 0) {
-    defenderNotes.push(`Danh hiệu: ${defTitle.activeTitleNames[0]}`);
+    defenderNotes.push(`Huân chương: ${defTitle.activeTitleNames[0]}`);
   }
 
   const atkOffenseStat = attacker.weapon.isMagic ? atkStats.mag : atkStats.str;
@@ -449,11 +452,11 @@ export function calculateCombatForecast(
 
   if (!attacker.weapon.isMagic && attacker.weapon.type !== 'BOW' && hasSkill(defender, 'PAVISE')) {
     attackerDamage = Math.max(0, Math.round(attackerDamage * 0.8));
-    defenderNotes.push('Khiên Bất Khuất (-20% ST)');
+    defenderNotes.push('Giáp Nghiêng (-20% ST)');
   }
   if ((attacker.weapon.isMagic || attacker.weapon.type === 'BOW') && hasSkill(defender, 'AEGIS')) {
     attackerDamage = Math.max(0, Math.round(attackerDamage * 0.75));
-    defenderNotes.push('Hộ Pháp Ma Lực (-25% ST)');
+    defenderNotes.push('Lưới Chắn (-25% ST)');
   }
 
   let atkRawHit =
@@ -489,7 +492,7 @@ export function calculateCombatForecast(
   if (hasSkill(attacker, 'SHADOW_STEP')) atkCritBonus += 15;
   if (hasSkill(attacker, 'WRATH') && attacker.hp < atkStats.maxHp * 0.5) {
     atkCritBonus += 30;
-    attackerNotes.push('Cuồng Nộ (+30% CM)');
+    attackerNotes.push('Tử Thủ (+30% CM)');
   }
   const attackerCrit = Math.max(
     0,
@@ -503,7 +506,7 @@ export function calculateCombatForecast(
   const defenderCanCounter = canUnitAttackAtDistance(defender, distance);
   const defenderFirst =
     defenderCanCounter && hasSkill(defender, 'VANTAGE') && defender.hp < defStats.maxHp * 0.5;
-  if (defenderFirst) defenderNotes.push('Phản Kích Tiên Phong');
+  if (defenderFirst) defenderNotes.push('Phục Kích Chiến Hào');
 
   let defenderDamage = 0;
   let defenderHit = 0;
@@ -575,7 +578,7 @@ export function calculateCombatForecast(
     if (hasSkill(defender, 'SHADOW_STEP')) defCritBonus += 15;
     if (hasSkill(defender, 'WRATH') && defender.hp < defStats.maxHp * 0.5) {
       defCritBonus += 30;
-      defenderNotes.push('Cuồng Nộ (+30% CM)');
+      defenderNotes.push('Tử Thủ (+30% CM)');
     }
     defenderCrit = Math.max(
       0,
@@ -638,7 +641,7 @@ export function applyExpAndLevelUp(
     ['res', 'res'],
   ];
 
-  while (newExp >= 100 && newLevel < 50) {
+  while (newExp >= 100 && newLevel < 60) {
     newExp -= 100;
     newLevel += 1;
     leveledUpAny = true;
@@ -683,7 +686,7 @@ export function applyExpAndLevelUp(
     updatedUnit: {
       ...unit,
       level: newLevel,
-      exp: newLevel >= 50 ? 0 : Math.min(99, newExp),
+      exp: newLevel >= 60 ? 0 : Math.min(99, newExp),
       hp: Math.min(newStats.maxHp, newHp),
       stats: newStats,
     },
@@ -1318,11 +1321,11 @@ export function checkBattleOutcome(
 
   const lordAlive = alivePlayers.some((u) => u.isLord);
   if (!lordAlive || alivePlayers.length === 0) {
-    return { status: 'DEFEAT', reason: 'Hoàng tử Kaelen đã gục ngã trên chiến trường.' };
+    return { status: 'DEFEAT', reason: 'Chỉ huy Kaelen đã gục ngã nơi tiền tuyến.' };
   }
 
   if (meta.objective === 'SEIZE' && throneSeized) {
-    return { status: 'VICTORY', reason: 'Hoàng tử Kaelen đã chiếm giữ Cứ Điểm Vương Ấn!' };
+    return { status: 'VICTORY', reason: 'Chỉ huy Kaelen đã đánh chiếm Sở Chỉ Huy Chiến Dịch!' };
   }
 
   if (meta.objective === 'DEFEAT_BOSS') {
@@ -1715,7 +1718,7 @@ export function tradePotionBetweenUnits(
   return {
     fromUnit: { ...fromUnit, potions: fromUnit.potions - 1 },
     toUnit: { ...toUnit, potions: toUnit.potions + 1 },
-    message: `${fromUnit.name} đã đưa 1 Bình Thuốc cho ${toUnit.name}.`,
+    message: `${fromUnit.name} đã chuyển 1 Túi Cứu Thương cho ${toUnit.name}.`,
   };
 }
 
@@ -2161,7 +2164,7 @@ export function rollAndDeliverBattleLootDrop(
         kind: 'GEM',
         id: gem.id,
         name: gem.name,
-        categoryLabel: 'Bảo Ngọc',
+        categoryLabel: 'Mô-đun Kỹ Thuật',
         accentColor: gem.color,
         dropChance,
         sentToConvoy: full,

@@ -19,6 +19,7 @@ import {
   ARMOR_TEMPLATES,
   buildPartyUnitsForAct,
   buildUnlockedRosterUnits,
+  canUnitStandOnTerrain,
   createEquipmentInstance,
   evaluateUnlockedTitles,
   fuseArmorInstances,
@@ -28,6 +29,7 @@ import {
   getUnitTitleBonuses,
   getWeaponSellPrice,
   getWeatherForTurn,
+  isNavalPassableTerrain,
   ITEMS,
   levelUpArmorInstance,
   levelUpWeaponForge,
@@ -435,6 +437,10 @@ export default function App() {
         };
       });
 
+      const navalSpawnCount = generated.playerSpawns.filter((s) =>
+        isNavalPassableTerrain(generated.grid[s.y]?.[s.x] ?? 'PLAIN')
+      ).length;
+
       const party = buildPartyUnitsForAct(
         generated.meta.actNumber,
         activeSave.roster,
@@ -442,7 +448,8 @@ export default function App() {
         activeSave.equipmentBag ?? [],
         activeSave.weaponForges ?? {},
         generated.meta.maxDeploySlots,
-        activeSave.preferredSquadIds
+        activeSave.preferredSquadIds,
+        navalSpawnCount > 0
       );
 
       const hydratedParty = party.map((u) => {
@@ -455,12 +462,13 @@ export default function App() {
         };
       });
 
-      // Arrange party onto numbered deployment slots along the map's AttackAxis toward Throne
+      // Arrange party onto numbered deployment slots along the map's AttackAxis toward Throne (strictly water-only for NAVAL)
       const deployedParty = computeFormationPlacement(
         hydratedParty,
         generated.playerSpawns,
         preset,
-        generated.throneCoord
+        generated.throneCoord,
+        generated.grid
       );
 
       const allUnits = [...deployedParty, ...generated.enemies];
@@ -509,18 +517,16 @@ export default function App() {
         : generated.playerSpawns[0];
       setCursor(startCursor);
 
-      // On Colossal maps (Đại Chiến Trường >= 480 tiles), default to 125% tactical zoom centered on vanguard
-      // while allowing instant 100% full-panorama reset via HUD or mousewheel!
-      const isColossal = generated.width * generated.height >= 480;
-      const initialZoom = isColossal
-        ? boardRendererRef.current.setZoomLevel(1.25)
-        : boardRendererRef.current.setZoomLevel(1.0);
+      // Default wide tactical maps (>= 20 columns) to 170% close-up tactical zoom centered on vanguard
+      // so 192x192 unit models appear large and clear immediately (with instant 100% full-panorama reset via HUD/wheel)
+      const useCloseUpZoom = generated.width >= 20;
+      const initialZoom = useCloseUpZoom
+        ? boardRendererRef.current.setZoomLevel(1.7)
+        : boardRendererRef.current.setZoomLevel(1.35);
       setZoomLevel(initialZoom);
-      if (isColossal) {
-        window.requestAnimationFrame(() => {
-          boardRendererRef.current.centerCameraOnTile(startCursor);
-        });
-      }
+      window.requestAnimationFrame(() => {
+        boardRendererRef.current.centerCameraOnTile(startCursor);
+      });
 
       // Immediately enter 'playing' state (t = 0ms)
       document.body.dataset.state = 'playing';
@@ -554,7 +560,7 @@ export default function App() {
     const curSave = saveDataRef.current;
     const nextMapId = Math.max(
       1,
-      Math.min(120, curSave.currentMapId || curSave.highestReachedMap || 1)
+      Math.min(200, curSave.currentMapId || curSave.highestReachedMap || 1)
     );
     const campMeta = getCampaignMapById(nextMapId);
     const rawPool = buildUnlockedRosterUnits(
@@ -604,7 +610,8 @@ export default function App() {
       allies,
       currentMap.playerSpawns,
       preset,
-      currentMap.throneCoord
+      currentMap.throneCoord,
+      currentMap.grid
     );
     const nextUnits = [...placed, ...enemies];
     unitsRef.current = nextUnits;
@@ -638,6 +645,24 @@ export default function App() {
         if (currentAllies.length >= currentMap.meta.maxDeploySlots) return;
         const candidate = unlockedAlliesRef.current.find((u) => u.templateId === templateId);
         if (!candidate) return;
+        if (candidate.moveType === 'NAVAL') {
+          const navalBerthCap = currentMap.playerSpawns.filter((s) =>
+            isNavalPassableTerrain(currentMap.grid[s.y]?.[s.x] ?? 'PLAIN')
+          ).length;
+          const deployedNavalCount = currentAllies.filter((u) => u.moveType === 'NAVAL').length;
+          if (deployedNavalCount >= navalBerthCap) {
+            soundEngine.cancel();
+            const msg =
+              navalBerthCap === 0
+                ? 'Chiến trường nội địa không có vùng nước để triển khai tàu chiến!'
+                : 'Đã kín bến neo đậu tàu chiến trên bản đồ này!';
+            setPhaseBanner(msg);
+            window.setTimeout(() => {
+              setPhaseBanner((cur) => (cur === msg ? null : cur));
+            }, 2200);
+            return;
+          }
+        }
         soundEngine.select();
         const effMaxHp = getEffectiveUnitStats(candidate, saveDataRef.current.commanderTitleId).maxHp;
         nextAllies = [
@@ -655,7 +680,8 @@ export default function App() {
         nextAllies,
         currentMap.playerSpawns,
         activeFormation,
-        currentMap.throneCoord
+        currentMap.throneCoord,
+        currentMap.grid
       );
       const nextUnits = [...placed, ...enemies];
       unitsRef.current = nextUnits;
@@ -1025,7 +1051,7 @@ export default function App() {
           winWeather === 'EMBERS' ||
           winWeather === 'SPARKS';
 
-        const nextHighest = Math.min(120, Math.max(nextSave.highestReachedMap, currentMap.meta.id + 1));
+        const nextHighest = Math.min(200, Math.max(nextSave.highestReachedMap, currentMap.meta.id + 1));
         nextSave = commitSaveWithTitles({
           ...nextSave,
           highestReachedMap: nextHighest,
@@ -2213,6 +2239,24 @@ export default function App() {
       if (!target) return;
       const reclassed = reclassUnit(target, targetTier1ClassId);
       if (!reclassed) return;
+
+      const isActiveInBattle = unitsRef.current.some((u) => u.id === unitId && u.hp > 0);
+      if (isActiveInBattle) {
+        const currentTile = mapDataRef.current.grid[target.y]?.[target.x];
+        if (currentTile && !canUnitStandOnTerrain(reclassed.moveType, currentTile)) {
+          soundEngine.cancel();
+          const msg =
+            reclassed.moveType === 'NAVAL'
+              ? 'Tàu chiến chỉ có thể hoạt động dưới nước — hãy chuyển hệ tại Doanh Trại hoặc trên mặt nước!'
+              : 'Đơn vị bộ/thiết giáp không thể đứng giữa vùng nước sâu — hãy chuyển hệ tại Doanh Trại!';
+          setPhaseBanner(msg);
+          window.setTimeout(() => {
+            setPhaseBanner((cur) => (cur === msg ? null : cur));
+          }, 2400);
+          return;
+        }
+      }
+
       soundEngine.levelUp();
       const updated = unitsRef.current.map((u) => (u.id === unitId ? reclassed : u));
       const updatedBench = unlockedAlliesRef.current.map((u) =>
@@ -2226,7 +2270,7 @@ export default function App() {
       saveDataRef.current = nextSave;
       saveCampaignData(nextSave);
       setSaveData(nextSave);
-      if (unitsRef.current.some((u) => u.id === unitId)) {
+      if (isActiveInBattle) {
         spawnFloatingText(`⇄ ${reclassed.className}`, target.x, target.y, '#38bdf8');
       }
     },
@@ -2694,7 +2738,7 @@ export default function App() {
       }
       const nextMapId = Math.max(
         1,
-        Math.min(120, curSave.currentMapId || curSave.highestReachedMap || 1)
+        Math.min(200, curSave.currentMapId || curSave.highestReachedMap || 1)
       );
       const maxSparLevel = getCampaignMapById(nextMapId).recommendedLevel + 2;
       if (target.level >= maxSparLevel) {
@@ -3274,12 +3318,15 @@ export default function App() {
           unitsRef.current,
           swapSourceCoord,
           tile,
-          mapData.playerSpawns
+          mapData.playerSpawns,
+          mapData.grid
         );
         if (swapped.changed) {
           soundEngine.select();
           unitsRef.current = swapped.units;
           setUnits(swapped.units);
+        } else {
+          soundEngine.cancel();
         }
         setSwapSourceCoord(null);
         return;
@@ -4047,7 +4094,7 @@ export default function App() {
           goldEarned={outcomeSnapshot.goldEarned}
           rewardNotes={outcomeSnapshot.rewardNotes}
           onNextMap={() =>
-            startBattleMap(Math.min(120, mapData.meta.id + 1), saveData, false)
+            startBattleMap(Math.min(200, mapData.meta.id + 1), saveData, false)
           }
           onRetryMap={() => startBattleMap(mapData.meta.id, saveData, true)}
           onOpenCampConvoy={() => handleOpenCampHub('CONVOY')}

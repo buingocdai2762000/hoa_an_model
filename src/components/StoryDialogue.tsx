@@ -161,8 +161,8 @@ export function StoryDialogue({ meta, mode, lines, onComplete }: StoryDialoguePr
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="text-xs font-mono-num text-amber-400 tracking-wide">
-              {meta.chapterCode} · {meta.subtitle} · Bản đồ {meta.id}/120 ·{' '}
-              {mode === 'INTRO' ? 'Biên Niên Mở Màn' : 'Khúc Khải Hoàn'}
+              {meta.chapterCode} · {meta.historicalDate} · Trận {meta.id}/200 ·{' '}
+              {mode === 'INTRO' ? 'Mệnh Lệnh Tác Chiến' : 'Báo Cáo Chiến Thắng'}
             </div>
             <h2 className="font-display text-2xl md:text-3xl font-bold text-amber-50 mt-0.5">
               {meta.title}
@@ -189,22 +189,28 @@ export function StoryDialogue({ meta, mode, lines, onComplete }: StoryDialoguePr
           </div>
         </div>
 
-        {/* Tactical Battle Scale & Continuity Strip (Zero pills, clean typographic separators) */}
+        {/* Tactical Battle Scale & Historical Briefing Strip */}
         <div className="px-4 py-2.5 bg-[#0c1220]/95 border border-amber-500/30 flex flex-col gap-1.5 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2 text-slate-300 font-mono-num">
             <div>
-              <span className="text-amber-300 font-semibold">Quy mô chiến trường:</span>{' '}
+              <span className="text-amber-300 font-semibold">Chiến trường:</span>{' '}
               <span>{meta.mapWidth}×{meta.mapHeight} ô</span>
               <span className="mx-2 text-slate-600">·</span>
-              <span>Xuất trận tối đa {meta.maxDeploySlots} tướng</span>
+              <span>Tối đa {meta.maxDeploySlots} đơn vị</span>
               <span className="mx-2 text-slate-600">·</span>
-              <span>Cấp đề nghị {meta.recommendedLevel}</span>
+              <span>Lv.{meta.recommendedLevel}</span>
               <span className="mx-2 text-slate-600">·</span>
               <span className="text-sky-300">{getObjectiveLabel(meta)}</span>
+              {meta.forceSummary && (
+                <>
+                  <span className="mx-2 text-slate-600">·</span>
+                  <span className="text-amber-200/90 font-sans">{meta.forceSummary}</span>
+                </>
+              )}
             </div>
             {recruitedNames && mode === 'INTRO' && (
               <div className="text-emerald-300 font-sans">
-                Đồng minh tiêu điểm: <span className="font-semibold">{recruitedNames}</span>
+                Tăng viện mới: <span className="font-semibold">{recruitedNames}</span>
               </div>
             )}
           </div>

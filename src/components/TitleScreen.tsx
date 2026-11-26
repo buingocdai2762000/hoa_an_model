@@ -105,17 +105,17 @@ export function TitleScreen({
       {/* Left-third Title Lockup & Menu Actions */}
       <div className="relative z-10 h-full flex flex-col justify-between px-10 py-10 md:px-16 md:py-12">
         <div className="text-xs tracking-[0.22em] text-amber-300/85 font-mono-num">
-          10 HỒI LIỀN MẠCH · 120 BẢN ĐỒ · 30 HỆ PHÁI TIẾN HÓA 3 BẬC · THỜI TIẾT &amp; 26 DANH HIỆU
+          2 ĐẠI CHIẾN LIỀN MẠCH · 200 TRẬN LỊCH SỬ (100 WWI + 100 WWII) · 5 QUÂN CHỦNG HIỆN ĐẠI
         </div>
 
-        <div className="flex flex-col gap-7 my-auto max-w-[600px]">
-          {/* Bespoke inline SVG Crimson Seal Title Emblem */}
+        <div className="flex flex-col gap-7 my-auto max-w-[640px]">
+          {/* Bespoke inline SVG Military Command Emblem */}
           <div className="flex flex-col gap-3">
             <svg
-              viewBox="0 0 440 72"
-              className="w-[340px] md:w-[440px] h-auto"
+              viewBox="0 0 460 72"
+              className="w-[340px] md:w-[460px] h-auto"
               role="img"
-              aria-label="Huy hiệu Huyết Ấn Biên Niên Sử"
+              aria-label="Huy hiệu Hỏa Ấn Đại Chiến: Thế Chiến I và II"
             >
               <defs>
                 <linearGradient id="sealGold" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -124,23 +124,24 @@ export function TitleScreen({
                   <stop offset="100%" stopColor="#926625" />
                 </linearGradient>
               </defs>
-              {/* Shield Crest */}
-              <path
-                d="M32 6 L56 15 L52 46 L32 64 L12 46 L8 15 Z"
-                fill="#1b1218"
+              {/* Octagonal Command Shield */}
+              <polygon
+                points="32,6 56,16 56,48 32,64 8,48 8,16"
+                fill="#141a24"
                 stroke="url(#sealGold)"
                 strokeWidth="2.5"
               />
-              <path
-                d="M32 13 L48 20 L45 43 L32 56 L19 43 L16 20 Z"
+              <polygon
+                points="32,12 49,20 49,44 32,57 15,44 15,20"
                 fill="#7f1d1d"
               />
-              {/* Crossed Sword Silhouette */}
-              <rect x="30" y="18" width="4" height="29" fill="#f8fafc" />
-              <rect x="23" y="38" width="18" height="3.5" fill="url(#sealGold)" />
-              <circle cx="32" cy="50" r="2.8" fill="url(#sealGold)" />
-              {/* Ornamental Horizontal Rule */}
-              <line x1="72" y1="36" x2="425" y2="36" stroke="url(#sealGold)" strokeWidth="1.5" opacity="0.65" />
+              {/* Five-Point Marshal Star */}
+              <polygon
+                points="32,17 36,28 48,28 38,35 42,46 32,39 22,46 26,35 16,28 28,28"
+                fill="url(#sealGold)"
+              />
+              {/* Horizontal Tactical Divider */}
+              <line x1="72" y1="36" x2="448" y2="36" stroke="url(#sealGold)" strokeWidth="1.5" opacity="0.65" />
               <polygon points="72,36 78,31 84,36 78,41" fill="url(#sealGold)" />
               <text
                 x="94"
@@ -149,9 +150,9 @@ export function TitleScreen({
                 fontFamily="Playfair Display, Georgia, serif"
                 fontSize="13"
                 fontWeight="700"
-                letterSpacing="3.5"
+                letterSpacing="3.2"
               >
-                CHRONICLE OF AETHELIS
+                WORLD WAR I &amp; II · 1914 — 1945
               </text>
               <text
                 x="94"
@@ -161,19 +162,19 @@ export function TitleScreen({
                 fontSize="11.5"
                 letterSpacing="1.2"
               >
-                CHIẾN THUẬT THEO LƯỢT · PIXEL HD-2D
+                CHIẾN THUẬT HỎA ẤN HIỆN ĐẠI · PIXEL HD-2D
               </text>
             </svg>
 
             <h1 className="font-display text-4xl md:text-5xl font-bold leading-[1.15] tracking-normal text-[#f7f0df] text-stroke-dark text-balance">
-              Huyết Ấn Biên Niên Sử
+              Hỏa Ấn Đại Chiến: Thế Chiến I &amp; II
             </h1>
-            <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-[48ch]">
-              Chỉ huy liên quân Valoria qua 120 bản đồ liên kết cốt truyện, 30 hệ phái tiến hóa 3 bậc uy nghiêm (Lv.5 / 15 / 30), hiệu ứng thời tiết biến đổi, hệ thống 26 danh hiệu và hơn 160 vũ khí &amp; bảo vật.
+            <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-[54ch]">
+              Chỉ huy hợp đồng binh chủng từ chiến hào 1914 đến đại chiến 1945 qua 200 trận đánh lịch sử: bộ binh súng ống, xe tăng &amp; thiết giáp, pháo binh &amp; tên lửa, không quân máy bay &amp; trực thăng cùng hạm đội tàu chiến, tàu ngầm và tàu sân bay.
             </p>
           </div>
 
-          {/* Primary Menu Actions (<= 3 actions) */}
+          {/* Primary Menu Actions */}
           <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 pt-1">
             {hasProgress ? (
               <>
@@ -183,7 +184,7 @@ export function TitleScreen({
                   onClick={onContinue}
                   className="px-6 py-3.5 text-sm font-semibold tracking-wide bg-amber-600 hover:bg-amber-500 text-slate-950 border border-amber-300/70 transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
                 >
-                  Tiếp Tục · Bản Đồ {saveData?.currentMapId ?? 1}/120
+                  Tiếp Tục · Trận {saveData?.currentMapId ?? 1}/200
                 </button>
                 <button
                   type="button"
@@ -200,7 +201,7 @@ export function TitleScreen({
                 onClick={onStartNew}
                 className="px-7 py-3.5 text-sm font-semibold tracking-wide bg-amber-600 hover:bg-amber-500 text-slate-950 border border-amber-300/80 transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
               >
-                Bắt Đầu Chiến Dịch
+                Bắt Đầu Chiến Dịch (1914)
               </button>
             )}
 
@@ -210,7 +211,7 @@ export function TitleScreen({
               onClick={onOpenCamp}
               className="px-5 py-3.5 text-sm font-semibold tracking-wide bg-[#152422] hover:bg-[#1d3430] text-emerald-200 border border-emerald-500/60 transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
             >
-              Doanh Trại Liên Quân ({(saveData?.gold ?? 3000).toLocaleString('vi-VN')}G)
+              Căn Cứ Chỉ Huy ({(saveData?.gold ?? 3000).toLocaleString('vi-VN')}G)
             </button>
 
             <button
@@ -218,14 +219,14 @@ export function TitleScreen({
               onClick={onOpenAtlas}
               className="px-5 py-3.5 text-sm font-medium tracking-wide bg-[#121722] hover:bg-[#1b2233] text-slate-200 border border-slate-600/70 transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
             >
-              Biên Niên Sử 120 Bản Đồ
+              Bản Đồ 200 Trận Lịch Sử
             </button>
           </div>
         </div>
 
         {/* Flat borderless PC x86 control hint line in bottom safe margin */}
         <p className="text-xs text-slate-300/85 tracking-wide whitespace-nowrap">
-          Chuột / WASD Di chuyển · Enter Chọn · D Doanh trại · T Trao đổi cạnh nhau · C Đội hình · B Quân nhu · E Kết lượt · P Tạm dừng
+          Chuột / WASD Di chuyển · Enter Chọn · D Căn cứ &amp; Kho · T Trao đổi kề cận · C Binh chủng · B Quân nhu · E Kết lượt · P Tạm dừng
         </p>
       </div>
     </main>

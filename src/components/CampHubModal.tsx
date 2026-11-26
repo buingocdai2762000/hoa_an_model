@@ -178,7 +178,7 @@ export function CampHubModal({
   const [activeTopic, setActiveTopic] = useState<DialogueTopic>('greeting');
   const [campFeedback, setCampFeedback] = useState<string | null>(null);
 
-  const nextMapId = Math.max(1, Math.min(120, saveData.currentMapId || saveData.highestReachedMap || 1));
+  const nextMapId = Math.max(1, Math.min(200, saveData.currentMapId || saveData.highestReachedMap || 1));
   const nextMapMeta = useMemo(() => getCampaignMapById(nextMapId), [nextMapId]);
   const maxSparLevel = nextMapMeta.recommendedLevel + 2;
 
@@ -224,7 +224,7 @@ export function CampHubModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Doanh Trại Liên Quân Valoria"
+      aria-label="Căn Cứ Chỉ Huy Hợp Đồng Binh Chủng"
       className="fixed inset-0 z-40 flex flex-col bg-[#080c15] text-slate-100 overflow-hidden"
     >
       {/* Top Camp Header Ribbon */}
@@ -233,11 +233,10 @@ export function CampHubModal({
           <Flame className="w-5 h-5 text-amber-400 shrink-0" />
           <div className="min-w-0">
             <h2 className="font-display text-lg font-bold text-amber-100 leading-tight truncate">
-              DOANH TRẠI LIÊN QUÂN VALORIA
+              CĂN CỨ CHỈ HUY &amp; DOANH TRẠI QUÂN ĐOÀN
             </h2>
             <p className="text-xs text-slate-400 truncate">
-              Hồi {nextMapMeta.actNumber} · Đã chiêu mộ {campUnits.length}/30 Anh Hùng · Mặt trận tiếp
-              theo: {nextMapMeta.chapterCode} {nextMapMeta.title} (Cấp khuyến nghị Lv.
+              {nextMapMeta.era === 'WW1' ? 'Thế Chiến I' : 'Thế Chiến II'} · Hồi {nextMapMeta.actNumber} · Đã biên chế {campUnits.length}/30 Đơn Vị · Mặt trận kế tiếp: {nextMapMeta.title} ({nextMapMeta.historicalDate}, Lv.
               {nextMapMeta.recommendedLevel})
             </p>
           </div>
@@ -256,7 +255,7 @@ export function CampHubModal({
             className="px-3 py-1.5 text-xs font-semibold bg-[#182238] hover:bg-[#22304e] text-amber-200 border border-amber-400/50 cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
           >
             <Hammer className="w-3.5 h-3.5 text-amber-300" />
-            <span>Lò Rèn &amp; Tiến Hóa</span>
+            <span>Xưởng Quân Giới &amp; Thăng Cấp</span>
           </button>
 
           <button

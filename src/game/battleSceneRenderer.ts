@@ -273,116 +273,102 @@ export class BattleSceneRenderer {
       rightAnimState
     );
 
-    // High-impact Pixel Weapon Slash / Elemental Magic VFX / Combat Art Aura
+    // High-impact Modern Combined-Arms VFX: Muzzle Flash, Tracers, Artillery/Missile Barrages & Explosions
     if (snap.activeStrike && snap.strikePhase === 'IMPACT') {
       const striker = snap.activeStrike.actor === 'ATTACKER' ? snap.attacker : snap.defender;
       const fromLeft = striker.faction === 'PLAYER';
+      const muzzleX = fromLeft ? leftX + 68 : rightX - 68;
       const targetX = fromLeft ? rightX : leftX;
       const targetY = groundY - 72;
-      const el = striker.weapon.element ?? 'NONE';
+      const prog = Math.min(1, snap.phaseProgress);
+
+      // Crisp Muzzle Flash at Striker Barrel
+      if (prog < 0.45) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(251, 146, 60, 0.72)';
+        ctx.beginPath();
+        ctx.arc(muzzleX, targetY - 6, 22 * (1 - prog), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fef9c3';
+        ctx.beginPath();
+        ctx.arc(muzzleX, targetY - 6, 11 * (1 - prog), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
 
       if (striker.weapon.isMagic) {
+        // Heavy Artillery Shell / Rocket MLRS / Ballistic Missile Strike & Fireball Explosion!
         ctx.save();
-        const r = 24 + snap.phaseProgress * 58;
-        if (el === 'FIRE') {
-          // Blazing Fire Pillar!
-          ctx.fillStyle = 'rgba(234, 88, 12, 0.42)';
-          ctx.fillRect(targetX - 38, groundY - 190, 76, 190);
-          ctx.fillStyle = 'rgba(251, 191, 36, 0.65)';
-          ctx.fillRect(targetX - 20, groundY - 170, 40, 170);
-          ctx.fillStyle = '#fef9c3';
-          ctx.fillRect(targetX - 8, groundY - 150, 16, 145);
-        } else if (el === 'THUNDER') {
-          // Jagged Sky Lightning Bolt!
-          ctx.strokeStyle = '#38bdf8';
-          ctx.lineWidth = 10;
-          ctx.beginPath();
-          ctx.moveTo(targetX - 18, 0);
-          ctx.lineTo(targetX + 16, h * 0.28);
-          ctx.lineTo(targetX - 14, h * 0.5);
-          ctx.lineTo(targetX + 6, groundY - 12);
-          ctx.stroke();
-          ctx.strokeStyle = '#fef9c3';
-          ctx.lineWidth = 4;
-          ctx.stroke();
-        } else if (el === 'WIND') {
-          // Emerald Cyclone Crescent Arcs!
-          ctx.strokeStyle = '#4ade80';
-          ctx.lineWidth = 7;
-          for (let i = 0; i < 3; i++) {
-            ctx.beginPath();
-            ctx.arc(targetX, targetY - 25 + i * 26, r * (0.65 + i * 0.12), 0.2, Math.PI * 1.15);
-            ctx.stroke();
-          }
-        } else if (el === 'ICE') {
-          // Crystalline Frost Shards
-          ctx.fillStyle = 'rgba(56, 189, 248, 0.45)';
-          ctx.beginPath();
-          ctx.moveTo(targetX, targetY - 68);
-          ctx.lineTo(targetX + 42, targetY);
-          ctx.lineTo(targetX, targetY + 62);
-          ctx.lineTo(targetX - 42, targetY);
-          ctx.closePath();
-          ctx.fill();
-          ctx.strokeStyle = '#f0f9ff';
-          ctx.lineWidth = 4;
-          ctx.stroke();
-        } else if (el === 'DARK') {
-          // Dark Void Gravity Vortex
-          ctx.fillStyle = 'rgba(88, 28, 135, 0.55)';
-          ctx.beginPath();
-          ctx.arc(targetX, targetY, r, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = '#e879f9';
-          ctx.lineWidth = 5;
-          ctx.stroke();
-          ctx.fillStyle = '#090412';
-          ctx.beginPath();
-          ctx.arc(targetX, targetY, r * 0.42, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          // Radiant Holy Light Beam
-          ctx.fillStyle = 'rgba(253, 224, 71, 0.35)';
-          ctx.fillRect(targetX - 44, 0, 88, groundY);
-          ctx.fillStyle = 'rgba(255, 251, 235, 0.72)';
-          ctx.fillRect(targetX - 18, 0, 36, groundY);
-        }
+        const r = 26 + prog * 68;
+        // Smoke & fire trail arcing from upper sky onto target
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.45)';
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.moveTo(muzzleX, targetY - 24);
+        ctx.quadraticCurveTo((muzzleX + targetX) / 2, h * 0.08, targetX, targetY);
+        ctx.stroke();
+
+        // Outer shockwave ring
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.75)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, r, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Multi-layered ordnance fireball blast
+        ctx.fillStyle = 'rgba(185, 28, 28, 0.55)';
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, r * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(249, 115, 22, 0.78)';
+        ctx.beginPath();
+        ctx.arc(targetX, targetY - 6, r * 0.58, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fef9c3';
+        ctx.beginPath();
+        ctx.arc(targetX, targetY - 8, r * 0.3, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
       } else if (striker.weapon.type === 'BOW') {
+        // High-Velocity Sniper Round / Anti-Air Flak Tracer Streak
+        const travel = Math.min(1, prog * 2.4);
         const ax = fromLeft
-          ? leftX + (rightX - leftX) * Math.min(1, snap.phaseProgress * 2.2)
-          : rightX - (rightX - leftX) * Math.min(1, snap.phaseProgress * 2.2);
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(ax - 24, targetY - 5, 48, 10);
-        ctx.fillStyle = snap.activeStrike.skillTriggered ? '#fbbf24' : '#fef08a';
-        ctx.fillRect(ax - 22, targetY - 2, 44, 4);
+          ? muzzleX + (targetX - muzzleX) * travel
+          : muzzleX - (muzzleX - targetX) * travel;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(254, 240, 138, 0.45)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(muzzleX, targetY - 4);
+        ctx.lineTo(ax, targetY - 4);
+        ctx.stroke();
+        ctx.fillStyle = '#f97316';
+        ctx.fillRect(ax - 18, targetY - 7, 36, 6);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ax - 14, targetY - 5, 28, 2);
+        ctx.restore();
       } else {
+        // Rifle/SMG Tracer Burst OR Tank/Naval Cannon Shell Impact!
         ctx.save();
         const isArt = Boolean(snap.activeStrike.skillTriggered);
-        ctx.strokeStyle = snap.activeStrike.crit || isArt ? '#fbbf24' : '#ffffff';
-        ctx.lineWidth = snap.activeStrike.crit || isArt ? 12 : 7;
-        ctx.beginPath();
-        ctx.arc(
-          targetX - (fromLeft ? 16 : -16),
-          targetY,
-          isArt ? 70 : 58,
-          fromLeft ? -Math.PI * 0.5 : Math.PI * 0.5,
-          fromLeft ? Math.PI * 0.44 : Math.PI * 1.5
-        );
-        ctx.stroke();
-        if (isArt) {
-          ctx.strokeStyle = '#38bdf8';
-          ctx.lineWidth = 4;
-          ctx.beginPath();
-          ctx.arc(
-            targetX - (fromLeft ? 6 : -6),
-            targetY,
-            52,
-            fromLeft ? -Math.PI * 0.42 : Math.PI * 0.58,
-            fromLeft ? Math.PI * 0.38 : Math.PI * 1.42
-          );
-          ctx.stroke();
+        for (let b = 0; b < 3; b++) {
+          const t = Math.min(1, prog * 2.1 - b * 0.14);
+          if (t <= 0) continue;
+          const bx = fromLeft
+            ? muzzleX + (targetX - muzzleX) * t
+            : muzzleX - (muzzleX - targetX) * t;
+          const by = targetY - 12 + b * 11;
+          ctx.fillStyle = snap.activeStrike.crit || isArt ? '#f97316' : '#facc15';
+          ctx.fillRect(bx - 16, by - 2, 32, 4);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(bx - 10, by - 1, 20, 2);
         }
+        // Impact sparks & blast ring on defender
+        ctx.strokeStyle = snap.activeStrike.crit || isArt ? '#fbbf24' : '#fb923c';
+        ctx.lineWidth = snap.activeStrike.crit || isArt ? 8 : 5;
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, 20 + prog * 42, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.restore();
       }
     }
@@ -475,19 +461,21 @@ export class BattleSceneRenderer {
     frame: SpriteAnimFrame,
     animState: SpriteAnimState
   ) {
-    // Crisp 64x72 HD-2D fighter scaled cleanly at 2.85x (~182x205 px) for heroic Fire Emblem duel presence!
+    // Native 192x192 Ultra-HD military fighter rendered at ~1:1 pixel fidelity for razor-sharp Fire Emblem duels!
     const sprite = getUnitSpriteCanvas({ ...unit, acted: false }, frame, hitFlash, animState);
-    const pxScale = 2.85;
+    const pxScale = 1.12;
     const drawW = Math.round(sprite.width * pxScale);
     const drawH = Math.round(sprite.height * pxScale);
-    const bootOffset = Math.round(7 * pxScale);
+    const bootOffset = Math.round(drawH * (12 / 192));
 
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.translate(cx, groundY);
     if (!isDead) {
       ctx.fillStyle = 'rgba(6, 9, 18, 0.52)';
       ctx.beginPath();
-      ctx.ellipse(0, 0, 36, 7, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, 44, 8, 0, 0, Math.PI * 2);
       ctx.fill();
     } else {
       ctx.globalAlpha = 0.28;

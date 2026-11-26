@@ -1,5 +1,11 @@
 import { CAMPAIGN_MAPS, getCampaignMapById } from './campaignData';
-import { CLASS_META, TERRAIN_DATA, WEAPONS } from './data';
+import {
+  CLASS_META,
+  TERRAIN_DATA,
+  WEAPONS,
+  canUnitStandOnTerrain,
+  isNavalPassableTerrain,
+} from './data';
 import type {
   AIPolicy,
   BiomeId,
@@ -7,12 +13,13 @@ import type {
   GeneratedMapData,
   MapObjective,
   TerrainType,
+  TheaterProfile,
   TileCoord,
   Unit,
   UnitClassId,
 } from './types';
 
-// Deterministic Mulberry32 PRNG so every Map 1..120 has a consistent, reproducible layout
+// Deterministic Mulberry32 PRNG so every Map 1..200 has a consistent, reproducible layout
 export function createSeededRng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -174,15 +181,23 @@ function stampOrganicBlob(
 }
 
 /**
- * Guarantees every walkable spawn, shop, throne & enemy position connects to playerSpawn[0] via foot-passable tiles.
+ * Guarantees every walkable spawn, shop, throne & enemy anchor connects to playerSpawn[0] via foot-passable tiles,
+ * while strictly preserving protected WATER tiles (naval deployment berths & naval enemy warships).
  */
 function ensureConnectivity(
   grid: TerrainType[][],
   origin: TileCoord,
-  targets: TileCoord[]
+  targets: TileCoord[],
+  protectedWaterTiles?: Set<string>
 ): void {
   const height = grid.length;
   const width = grid[0].length;
+  const dirs: Array<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
 
   const getReachableSet = (): Set<string> => {
     const visited = new Set<string>();
@@ -190,12 +205,6 @@ function ensureConnectivity(
     visited.add(`${origin.x},${origin.y}`);
     while (queue.length > 0) {
       const cur = queue.shift()!;
-      const dirs = [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-      ];
       for (const [dx, dy] of dirs) {
         const nx = cur.x + dx;
         const ny = cur.y + dy;
@@ -217,32 +226,76 @@ function ensureConnectivity(
 
   let reachable = getReachableSet();
   for (const target of targets) {
+    const targetKey = `${target.x},${target.y}`;
+    if (protectedWaterTiles?.has(targetKey)) continue;
     if (!isFootPassable(grid[target.y][target.x])) {
       grid[target.y][target.x] = 'ROAD';
     }
-    if (reachable.has(`${target.x},${target.y}`)) continue;
+    if (reachable.has(targetKey)) continue;
 
-    let cx = origin.x;
-    let cy = origin.y;
-    while (cx !== target.x) {
-      cx += cx < target.x ? 1 : -1;
-      if (!isFootPassable(grid[cy][cx])) {
-        grid[cy][cx] = grid[cy][cx] === 'WATER' || grid[cy][cx] === 'LAVA' ? 'BRIDGE' : 'ROAD';
+    // Dijkstra shortest carve from current reachable foot network to target avoiding protectedWaterTiles
+    const dist = Array.from({ length: height }, () => Array(width).fill(Infinity));
+    const prev: Array<Array<TileCoord | null>> = Array.from({ length: height }, () =>
+      Array(width).fill(null)
+    );
+    const bucket: TileCoord[] = [];
+    for (const rKey of reachable) {
+      const [rxStr, ryStr] = rKey.split(',');
+      const rx = Number(rxStr);
+      const ry = Number(ryStr);
+      dist[ry][rx] = 0;
+      bucket.push({ x: rx, y: ry });
+    }
+
+    while (bucket.length > 0) {
+      let bestIdx = 0;
+      for (let i = 1; i < bucket.length; i++) {
+        if (dist[bucket[i].y][bucket[i].x] < dist[bucket[bestIdx].y][bucket[bestIdx].x]) {
+          bestIdx = i;
+        }
+      }
+      const cur = bucket.splice(bestIdx, 1)[0];
+      if (cur.x === target.x && cur.y === target.y) break;
+      const curDist = dist[cur.y][cur.x];
+
+      for (const [dx, dy] of dirs) {
+        const nx = cur.x + dx;
+        const ny = cur.y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const nKey = `${nx},${ny}`;
+        const stepCost = isFootPassable(grid[ny][nx])
+          ? 0
+          : protectedWaterTiles?.has(nKey)
+          ? 5000
+          : grid[ny][nx] === 'WATER' || grid[ny][nx] === 'LAVA'
+          ? 1
+          : 2;
+        const nextDist = curDist + stepCost;
+        if (nextDist < dist[ny][nx]) {
+          dist[ny][nx] = nextDist;
+          prev[ny][nx] = cur;
+          bucket.push({ x: nx, y: ny });
+        }
       }
     }
-    while (cy !== target.y) {
-      cy += cy < target.y ? 1 : -1;
-      if (!isFootPassable(grid[cy][cx])) {
-        grid[cy][cx] = grid[cy][cx] === 'WATER' || grid[cy][cx] === 'LAVA' ? 'BRIDGE' : 'ROAD';
+
+    let step: TileCoord | null = target;
+    while (step) {
+      const sKey = `${step.x},${step.y}`;
+      if (!isFootPassable(grid[step.y][step.x]) && !protectedWaterTiles?.has(sKey)) {
+        grid[step.y][step.x] =
+          grid[step.y][step.x] === 'WATER' || grid[step.y][step.x] === 'LAVA' ? 'BRIDGE' : 'ROAD';
       }
+      step = prev[step.y][step.x];
     }
+
     reachable = getReachableSet();
   }
 }
 
 function pickEnemyWeaponId(classId: UnitClassId, actNumber: number, isElite = false): string {
   const meta = CLASS_META[classId];
-  const tier = actNumber >= 9 ? 4 : actNumber >= 7 ? 3 : actNumber >= 4 ? 2 : 1;
+  const tier = actNumber >= 13 ? 4 : actNumber >= 9 ? 3 : actNumber >= 5 ? 2 : 1;
   const primary = meta?.allowedWeaponTypes[0] ?? 'SWORD';
 
   if (primary === 'STAFF') {
@@ -344,6 +397,12 @@ function createEnemyUnit(
     def += 4;
     spd = Math.max(3, spd - 2);
     mov = 4;
+  } else if (meta.moveType === 'NAVAL') {
+    maxHp += 6;
+    str += 2;
+    def += 3;
+    res += 2;
+    mov = 5;
   } else if (meta.moveType === 'MOUNTED') {
     maxHp += 2;
     mov = 6;
@@ -405,7 +464,14 @@ function createEnemyUnit(
     res += 3;
   }
 
-  const equipped = WEAPONS[weaponId] ?? WEAPONS.iron_sword;
+  const baseEquipped = WEAPONS[weaponId] ?? WEAPONS.iron_sword;
+  const equipped = isBoss
+    ? {
+        ...baseEquipped,
+        minRange: 1,
+        maxRange: Math.max(2, baseEquipped.maxRange),
+      }
+    : baseEquipped;
 
   return {
     id,
@@ -471,7 +537,8 @@ export function computeFormationPlacement(
   allies: Unit[],
   spawns: TileCoord[],
   preset: FormationPresetId,
-  throneCoord: TileCoord
+  throneCoord: TileCoord,
+  grid?: TerrainType[][]
 ): Unit[] {
   if (allies.length === 0 || spawns.length === 0) return allies;
 
@@ -498,117 +565,173 @@ export function computeFormationPlacement(
   const forwardScore = (s: TileCoord) => (s.x - cx) * dirX + (s.y - cy) * dirY;
   const lateralScore = (s: TileCoord) => (s.x - cx) * perpX + (s.y - cy) * perpY;
 
-  if (preset === 'BALANCED') {
-    const rolePriority: Record<TacticalFormationRole, number> = {
-      LORD: 0,
-      TANK: 1,
-      MELEE: 2,
-      FLANKER: 3,
-      RANGED: 4,
-      SUPPORT: 5,
-    };
-    const sortedUnits = [...allies].sort(
-      (a, b) => rolePriority[classifyUnitFormationRole(a)] - rolePriority[classifyUnitFormationRole(b)]
-    );
-    const orderedSpawns = [...uniqueSpawns].sort((a, b) => {
-      const scoreA = Math.abs(lateralScore(a)) - forwardScore(a) * 0.45;
-      const scoreB = Math.abs(lateralScore(b)) - forwardScore(b) * 0.45;
-      return scoreA - scoreB;
-    });
-    return sortedUnits.map((u, idx) => {
-      const sp = orderedSpawns[idx % orderedSpawns.length];
-      return { ...u, x: sp.x, y: sp.y };
-    });
-  }
-
-  if (preset === 'PHALANX') {
-    const frontPriority: Record<TacticalFormationRole, number> = {
-      TANK: 0,
-      MELEE: 1,
-      FLANKER: 2,
-      LORD: 3,
-      RANGED: 4,
-      SUPPORT: 5,
-    };
-    const sortedUnits = [...allies].sort((a, b) => {
-      const pa = frontPriority[classifyUnitFormationRole(a)];
-      const pb = frontPriority[classifyUnitFormationRole(b)];
-      if (pa !== pb) return pa - pb;
-      return b.stats.def - a.stats.def;
-    });
-    const orderedSpawns = [...uniqueSpawns].sort((a, b) => {
-      const df = forwardScore(b) - forwardScore(a);
-      if (Math.abs(df) > 0.35) return df;
-      return Math.abs(lateralScore(a)) - Math.abs(lateralScore(b));
-    });
-    return sortedUnits.map((u, idx) => {
-      const sp = orderedSpawns[idx % orderedSpawns.length];
-      return { ...u, x: sp.x, y: sp.y };
-    });
-  }
-
-  if (preset === 'SPEARHEAD') {
-    const wedgePriority: Record<TacticalFormationRole, number> = {
+  const sortUnitsForPreset = (subset: Unit[]): Unit[] => {
+    if (preset === 'BALANCED') {
+      const rolePriority: Record<TacticalFormationRole, number> = {
+        LORD: 0,
+        TANK: 1,
+        MELEE: 2,
+        FLANKER: 3,
+        RANGED: 4,
+        SUPPORT: 5,
+      };
+      return [...subset].sort(
+        (a, b) => rolePriority[classifyUnitFormationRole(a)] - rolePriority[classifyUnitFormationRole(b)]
+      );
+    }
+    if (preset === 'PHALANX') {
+      const frontPriority: Record<TacticalFormationRole, number> = {
+        TANK: 0,
+        MELEE: 1,
+        FLANKER: 2,
+        LORD: 3,
+        RANGED: 4,
+        SUPPORT: 5,
+      };
+      return [...subset].sort((a, b) => {
+        const pa = frontPriority[classifyUnitFormationRole(a)];
+        const pb = frontPriority[classifyUnitFormationRole(b)];
+        if (pa !== pb) return pa - pb;
+        return b.stats.def - a.stats.def;
+      });
+    }
+    if (preset === 'SPEARHEAD') {
+      const wedgePriority: Record<TacticalFormationRole, number> = {
+        FLANKER: 0,
+        LORD: 1,
+        MELEE: 2,
+        TANK: 3,
+        RANGED: 4,
+        SUPPORT: 5,
+      };
+      return [...subset].sort((a, b) => {
+        const pa = wedgePriority[classifyUnitFormationRole(a)];
+        const pb = wedgePriority[classifyUnitFormationRole(b)];
+        if (pa !== pb) return pa - pb;
+        return b.stats.mov - a.stats.mov;
+      });
+    }
+    const wingPriority: Record<TacticalFormationRole, number> = {
       FLANKER: 0,
-      LORD: 1,
-      MELEE: 2,
-      TANK: 3,
-      RANGED: 4,
+      MELEE: 1,
+      TANK: 2,
+      RANGED: 3,
+      LORD: 4,
       SUPPORT: 5,
     };
-    const sortedUnits = [...allies].sort((a, b) => {
-      const pa = wedgePriority[classifyUnitFormationRole(a)];
-      const pb = wedgePriority[classifyUnitFormationRole(b)];
-      if (pa !== pb) return pa - pb;
-      return b.stats.mov - a.stats.mov;
-    });
-    const orderedSpawns = [...uniqueSpawns].sort((a, b) => {
-      const da = Math.abs(throneCoord.x - a.x) + Math.abs(throneCoord.y - a.y);
-      const db = Math.abs(throneCoord.x - b.x) + Math.abs(throneCoord.y - b.y);
-      return da - db;
-    });
+    return [...subset].sort(
+      (a, b) => wingPriority[classifyUnitFormationRole(a)] - wingPriority[classifyUnitFormationRole(b)]
+    );
+  };
+
+  const orderSpawnsForPreset = (subset: TileCoord[]): TileCoord[] => {
+    if (subset.length <= 1) return [...subset];
+    if (preset === 'BALANCED') {
+      return [...subset].sort((a, b) => {
+        const scoreA = Math.abs(lateralScore(a)) - forwardScore(a) * 0.45;
+        const scoreB = Math.abs(lateralScore(b)) - forwardScore(b) * 0.45;
+        return scoreA - scoreB;
+      });
+    }
+    if (preset === 'PHALANX') {
+      return [...subset].sort((a, b) => {
+        const df = forwardScore(b) - forwardScore(a);
+        if (Math.abs(df) > 0.35) return df;
+        return Math.abs(lateralScore(a)) - Math.abs(lateralScore(b));
+      });
+    }
+    if (preset === 'SPEARHEAD') {
+      return [...subset].sort((a, b) => {
+        const da = Math.abs(throneCoord.x - a.x) + Math.abs(throneCoord.y - a.y);
+        const db = Math.abs(throneCoord.x - b.x) + Math.abs(throneCoord.y - b.y);
+        return da - db;
+      });
+    }
+    const leftWing = subset
+      .filter((s) => lateralScore(s) <= 0)
+      .sort((a, b) => lateralScore(a) - lateralScore(b) || forwardScore(b) - forwardScore(a));
+    const rightWing = subset
+      .filter((s) => lateralScore(s) > 0)
+      .sort((a, b) => lateralScore(b) - lateralScore(a) || forwardScore(b) - forwardScore(a));
+    const interleavedWings: TileCoord[] = [];
+    const maxLen = Math.max(leftWing.length, rightWing.length);
+    for (let i = 0; i < maxLen; i++) {
+      if (leftWing[i]) interleavedWings.push(leftWing[i]);
+      if (rightWing[i]) interleavedWings.push(rightWing[i]);
+    }
+    return interleavedWings;
+  };
+
+  if (!grid) {
+    const sortedUnits = sortUnitsForPreset(allies);
+    const orderedSpawns = orderSpawnsForPreset(uniqueSpawns);
     return sortedUnits.map((u, idx) => {
       const sp = orderedSpawns[idx % orderedSpawns.length];
       return { ...u, x: sp.x, y: sp.y };
     });
   }
 
-  // PINCER (Hai Cánh): Splits mobile units onto outer Left & Right wings perpendicular to the attack axis!
-  const wingPriority: Record<TacticalFormationRole, number> = {
-    FLANKER: 0,
-    MELEE: 1,
-    TANK: 2,
-    RANGED: 3,
-    LORD: 4,
-    SUPPORT: 5,
-  };
-  const sortedUnits = [...allies].sort(
-    (a, b) => wingPriority[classifyUnitFormationRole(a)] - wingPriority[classifyUnitFormationRole(b)]
+  // Domain-strict placement when terrain grid is provided:
+  // NAVAL units can ONLY occupy WATER/BRIDGE berths; land units occupy dry land / bridge berths.
+  const waterOnlySpawns = orderSpawnsForPreset(
+    uniqueSpawns.filter((s) => grid[s.y]?.[s.x] === 'WATER')
   );
-  const leftWing = uniqueSpawns
-    .filter((s) => lateralScore(s) <= 0)
-    .sort((a, b) => lateralScore(a) - lateralScore(b) || forwardScore(b) - forwardScore(a));
-  const rightWing = uniqueSpawns
-    .filter((s) => lateralScore(s) > 0)
-    .sort((a, b) => lateralScore(b) - lateralScore(a) || forwardScore(b) - forwardScore(a));
+  const bridgeSpawns = orderSpawnsForPreset(
+    uniqueSpawns.filter((s) => grid[s.y]?.[s.x] === 'BRIDGE')
+  );
+  const dryLandSpawns = orderSpawnsForPreset(
+    uniqueSpawns.filter((s) => {
+      const t = grid[s.y]?.[s.x];
+      return Boolean(t && t !== 'WATER' && t !== 'BRIDGE' && isFootPassable(t));
+    })
+  );
 
-  const interleavedWings: TileCoord[] = [];
-  const maxLen = Math.max(leftWing.length, rightWing.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (leftWing[i]) interleavedWings.push(leftWing[i]);
-    if (rightWing[i]) interleavedWings.push(rightWing[i]);
+  const navalBerths = [...waterOnlySpawns, ...bridgeSpawns];
+  const usedSpawnKeys = new Set<string>();
+  const placedResult: Unit[] = [];
+
+  const navalAllies = sortUnitsForPreset(allies.filter((u) => u.moveType === 'NAVAL'));
+  for (const nu of navalAllies) {
+    const berth = navalBerths.find((s) => !usedSpawnKeys.has(`${s.x},${s.y}`));
+    if (!berth) continue; // Never place a warship on dry land
+    usedSpawnKeys.add(`${berth.x},${berth.y}`);
+    placedResult.push({ ...nu, x: berth.x, y: berth.y });
   }
-  return sortedUnits.map((u, idx) => {
-    const sp = interleavedWings[idx % interleavedWings.length];
-    return { ...u, x: sp.x, y: sp.y };
-  });
+
+  const landPool = orderSpawnsForPreset([...dryLandSpawns, ...bridgeSpawns]).filter(
+    (s) => !usedSpawnKeys.has(`${s.x},${s.y}`)
+  );
+  const remainingWaterForAir = waterOnlySpawns.filter((s) => !usedSpawnKeys.has(`${s.x},${s.y}`));
+
+  const nonNavalAllies = sortUnitsForPreset(allies.filter((u) => u.moveType !== 'NAVAL'));
+  for (const lu of nonNavalAllies) {
+    let slot = landPool.find(
+      (s) => !usedSpawnKeys.has(`${s.x},${s.y}`) && canUnitStandOnTerrain(lu.moveType, grid[s.y][s.x])
+    );
+    if (!slot) {
+      slot = landPool.find((s) => !usedSpawnKeys.has(`${s.x},${s.y}`));
+    }
+    if (!slot && lu.moveType === 'FLYING') {
+      slot = remainingWaterForAir.find((s) => !usedSpawnKeys.has(`${s.x},${s.y}`));
+    }
+    if (!slot && landPool.length > 0) {
+      slot = landPool.find((s) => canUnitStandOnTerrain(lu.moveType, grid[s.y][s.x])) ?? landPool[0];
+    }
+    if (slot) {
+      usedSpawnKeys.add(`${slot.x},${slot.y}`);
+      placedResult.push({ ...lu, x: slot.x, y: slot.y });
+    }
+  }
+
+  return placedResult;
 }
 
 export function swapOrMoveDeploymentUnit(
   units: Unit[],
   fromCoord: TileCoord,
   toCoord: TileCoord,
-  validSpawns: TileCoord[]
+  validSpawns: TileCoord[],
+  grid?: TerrainType[][]
 ): { units: Unit[]; changed: boolean; action: 'SWAPPED' | 'MOVED' | 'NONE' } {
   if (fromCoord.x === toCoord.x && fromCoord.y === toCoord.y) {
     return { units, changed: false, action: 'NONE' };
@@ -628,6 +751,17 @@ export function swapOrMoveDeploymentUnit(
   const unitB = units.find(
     (u) => u.faction === 'PLAYER' && u.hp > 0 && u.x === toCoord.x && u.y === toCoord.y
   );
+
+  if (grid) {
+    const toTerrain = grid[toCoord.y]?.[toCoord.x];
+    const fromTerrain = grid[fromCoord.y]?.[fromCoord.x];
+    if (!toTerrain || !canUnitStandOnTerrain(unitA.moveType, toTerrain)) {
+      return { units, changed: false, action: 'NONE' };
+    }
+    if (unitB && (!fromTerrain || !canUnitStandOnTerrain(unitB.moveType, fromTerrain))) {
+      return { units, changed: false, action: 'NONE' };
+    }
+  }
 
   if (unitB) {
     return {
@@ -1148,6 +1282,168 @@ export function generateMap(mapId: number): GeneratedMapData {
     }
   }
 
+  // Theater-specific historical terrain sculpting so every battleground matches its historical geography & title!
+  switch (meta.theaterProfile) {
+    case 'FLEET_NAVAL': {
+      // Broad open sea lanes for fleet engagements + island outposts linked by pier causeways
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 4; x < width - 3; x++) {
+          if (y <= 3 || y >= height - 4 || Math.abs(x - midX) <= Math.max(3, Math.floor(width * 0.2))) {
+            grid[y][x] = 'WATER';
+          }
+        }
+      }
+      stampOrganicBlob(grid, midX - 2, clampCoord(4, 3, height - 4), 2.4, 1.5, 'SAND', rng);
+      stampOrganicBlob(grid, midX + 2, clampCoord(height - 5, 3, height - 4), 2.4, 1.5, 'SAND', rng);
+      stampFort(midX - 2, clampCoord(4, 3, height - 4));
+      stampFort(midX + 2, clampCoord(height - 5, 3, height - 4));
+      const causewayY = [clampCoord(4, 2, height - 3), midY, clampCoord(height - 5, 2, height - 3)];
+      for (const cy of causewayY) {
+        for (let x = 3; x < width - 2; x++) {
+          if (grid[cy][x] === 'WATER') grid[cy][x] = 'BRIDGE';
+        }
+      }
+      break;
+    }
+    case 'AMPHIBIOUS_LANDING': {
+      // Surf zone + golden landing beachhead + landing pier bridges + coastal bunker line
+      if (axis === 'SOUTH_TO_NORTH' || axis === 'NORTH_TO_SOUTH') {
+        const surfY = axis === 'SOUTH_TO_NORTH' ? height - 5 : 4;
+        const sandY = axis === 'SOUTH_TO_NORTH' ? height - 6 : 5;
+        const bunkerY = axis === 'SOUTH_TO_NORTH' ? height - 8 : 7;
+        for (let x = 1; x < width - 1; x++) {
+          grid[clampCoord(surfY, 1, height - 2)][x] = 'WATER';
+          grid[clampCoord(surfY + (axis === 'SOUTH_TO_NORTH' ? 1 : -1), 1, height - 2)][x] = 'WATER';
+          grid[clampCoord(sandY, 1, height - 2)][x] = 'SAND';
+        }
+        for (const px of [4, midX, width - 5]) {
+          for (let dy = -2; dy <= 2; dy++) {
+            const py = clampCoord(surfY + dy, 1, height - 2);
+            if (grid[py][px] === 'WATER') grid[py][px] = 'BRIDGE';
+          }
+        }
+        stampFort(Math.round(width * 0.28), bunkerY);
+        stampFort(midX, bunkerY);
+        stampFort(Math.round(width * 0.72), bunkerY);
+      } else {
+        const seawardWest = spawnCentroid.x < midX;
+        const surfX = seawardWest ? 4 : width - 5;
+        const sandX = seawardWest ? 6 : width - 7;
+        const bunkerX = seawardWest ? 8 : width - 9;
+        for (let y = 1; y < height - 1; y++) {
+          grid[y][clampCoord(surfX, 1, width - 2)] = 'WATER';
+          grid[y][clampCoord(surfX + (seawardWest ? 1 : -1), 1, width - 2)] = 'WATER';
+          grid[y][clampCoord(sandX, 1, width - 2)] = 'SAND';
+        }
+        for (const py of [2, midY, height - 3]) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const px = clampCoord(surfX + dx, 1, width - 2);
+            if (grid[py][px] === 'WATER') grid[py][px] = 'BRIDGE';
+          }
+        }
+        stampFort(bunkerX, 3);
+        stampFort(bunkerX, midY);
+        stampFort(bunkerX, height - 4);
+      }
+      break;
+    }
+    case 'FORTRESS_SIEGE': {
+      // Concentric concrete fortress belt around HQ + woodland groves (e.g., Meuse Valley & Liège Forts!)
+      if (base === 'PLAIN') {
+        stampOrganicBlob(grid, Math.round(width * 0.28), 2, 2.6, 1.8, 'FOREST', rng);
+        stampOrganicBlob(grid, Math.round(width * 0.3), height - 3, 2.6, 1.8, 'FOREST', rng);
+        stampOrganicBlob(grid, Math.round(width * 0.64), 2, 2.2, 1.5, 'FOREST', rng);
+      }
+      const fortRingOffsets: Array<[number, number]> = [
+        [-4, -3],
+        [-4, 3],
+        [-3, 0],
+        [0, -3],
+        [0, 3],
+      ];
+      for (const [ox, oy] of fortRingOffsets) {
+        const fx = clampCoord(throneCoord.x + (throneCoord.x > midX ? ox : -ox), 3, width - 4);
+        const fy = clampCoord(throneCoord.y + oy, 2, height - 3);
+        if (grid[fy][fx] !== 'WATER' && grid[fy][fx] !== 'BRIDGE') {
+          stampFort(fx, fy);
+        }
+      }
+      // Broken outer parapet segments with wide assault breaches
+      const wallX = clampCoord(throneCoord.x + (throneCoord.x > midX ? -5 : 5), 4, width - 5);
+      for (let y = 2; y < height - 2; y++) {
+        if (y % 3 === 1 && Math.abs(y - midY) > 1 && grid[y][wallX] !== 'WATER' && grid[y][wallX] !== 'BRIDGE') {
+          grid[y][wallX] = 'WALL';
+        }
+      }
+      break;
+    }
+    case 'TRENCH_FRONT': {
+      // Parallel trench strongpoints, staggered sandbag parapets & shell-hole craters
+      const line1X = Math.round(width * 0.42);
+      const line2X = Math.round(width * 0.68);
+      for (const lx of [line1X, line2X]) {
+        for (let y = 2; y < height - 2; y += 3) {
+          if (Math.abs(y - midY) > 1 && grid[y][lx] !== 'WATER' && grid[y][lx] !== 'BRIDGE') {
+            grid[y][lx] = 'WALL';
+          }
+        }
+      }
+      stampFort(line1X + 1, clampCoord(midY - 3, 2, height - 3));
+      stampFort(line2X - 1, clampCoord(midY + 3, 2, height - 3));
+      stampOrganicBlob(grid, Math.round(width * 0.54), clampCoord(midY - 3, 2, height - 3), 1.8, 1.4, 'WATER', rng);
+      if (base === 'PLAIN') {
+        stampOrganicBlob(grid, Math.round(width * 0.34), clampCoord(midY + 3, 2, height - 3), 2.2, 1.5, 'FOREST', rng);
+      }
+      break;
+    }
+    case 'RIVER_CANAL': {
+      // Ensure a continuous navigable river/canal exists even if base layout was сухопутный
+      let existingWater = 0;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) if (grid[y][x] === 'WATER') existingWater++;
+      }
+      if (existingWater < 12) {
+        for (let y = 0; y < height; y++) {
+          const rx = clampCoord(Math.round(midX + Math.sin(y * 0.4 + variant) * 1.6), 4, width - 5);
+          grid[y][rx] = 'WATER';
+          grid[y][rx + 1] = 'WATER';
+        }
+        for (const by of [2, midY, height - 3]) {
+          for (let x = midX - 3; x <= midX + 4; x++) {
+            if (grid[by][x] === 'WATER') grid[by][x] = 'BRIDGE';
+          }
+        }
+      }
+      break;
+    }
+    case 'URBAN_ASSAULT': {
+      // Add an urban river/canal embankment (Volga, Spree, Seine, Huangpu) along the southern quay
+      let existingWater = 0;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) if (grid[y][x] === 'WATER') existingWater++;
+      }
+      if (existingWater < 8 && height >= 12) {
+        const canalY = height - 2;
+        for (let x = 2; x < width - 2; x++) {
+          grid[canalY][x] = x % 6 === 0 ? 'BRIDGE' : 'WATER';
+        }
+      }
+      break;
+    }
+    case 'JUNGLE_ISLAND': {
+      // Lush tropical jungle canopy + coastal lagoon & sandy landing coves
+      stampOrganicBlob(grid, Math.round(width * 0.44), midY - 2, 2.8, 2.0, 'FOREST', rng);
+      stampOrganicBlob(grid, Math.round(width * 0.62), midY + 2, 2.8, 2.0, 'FOREST', rng);
+      for (let x = 2; x < width - 2; x++) {
+        if (grid[1][x] === base) grid[1][x] = 'WATER';
+        if (grid[2][x] === base && x % 3 !== 0) grid[2][x] = 'SAND';
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
   // Center Holdout defensive ring: surround player's central plateau with tactical Forts & choke walls!
   if (axis === 'CENTER_HOLDOUT') {
     stampOrganicBlob(grid, midX, midY, 3.6, 2.8, 'ROAD', rng);
@@ -1168,7 +1464,7 @@ export function generateMap(mapId: number): GeneratedMapData {
   carveWindingRoad(grid, spawnCentroid, flankWaypoint, rng, false);
   carveWindingRoad(grid, flankWaypoint, throneCoord, rng, false);
 
-  // Clear & stamp Player Deployment Zone tiles
+  // Clear & stamp Player Land Deployment Zone tiles first
   for (const sp of playerSpawns) {
     grid[sp.y][sp.x] = base === 'SAND' ? 'SAND' : base === 'SNOW' ? 'SNOW' : 'ROAD';
   }
@@ -1222,64 +1518,198 @@ export function generateMap(mapId: number): GeneratedMapData {
   grid[armoryShopCoord.y][armoryShopCoord.x] = 'SHOP_ARMORY';
   grid[vendorShopCoord.y][vendorShopCoord.x] = 'SHOP_VENDOR';
 
-  // Scale Enemy Legion count with BOTH Act progression AND Battlefield Area (Medium -> Large -> Colossal!)
+  // Scale Enemy Legion count with BOTH 16-Act progression AND Battlefield Area (Medium -> Large -> Colossal!)
   const area = width * height;
   const sizeBonus = area >= 600 ? 6 : area >= 480 ? 4 : area >= 330 ? 2 : 0;
   const baseGrunts =
     6 +
-    Math.floor(meta.actNumber * 0.85) +
+    Math.floor(meta.actNumber * 0.65) +
     sizeBonus +
-    (meta.chapterInAct === 12 ? 2 : 0);
+    (meta.chapterInAct >= 12 ? 2 : 0);
   const totalEnemyCount = Math.min(24, Math.max(8, baseGrunts + 1));
 
-  // Progressive Enemy Class Pools across all 4 tiers & 30 lineages
-  const tier1Pool: UnitClassId[] = [
-    'FIGHTER', 'CAVALIER', 'ARCHER', 'MAGE', 'KNIGHT', 'MYRMIDON', 'WYVERN_RIDER',
-    'DARK_MAGE', 'THIEF', 'MERCENARY', 'SOLDIER', 'MONK', 'NOMAD', 'SPELLBLADE',
-    'PIRATE', 'GRIFFIN_RIDER', 'SAMURAI', 'SHAMAN', 'BRAWLER', 'OUTRIDER',
-    'DARK_KNIGHT', 'DRAGOON', 'NINJA', 'TEMPLAR', 'CHRONOMANCER',
-  ];
-  const tier2Pool: UnitClassId[] = [
-    'BERSERKER', 'PALADIN', 'SNIPER', 'NECROMANCER', 'GENERAL', 'SWORDMASTER', 'WYVERN_LORD',
-    'ASSASSIN', 'HERO', 'HALBERDIER', 'EXORCIST', 'NOMAD_TROOPER', 'MORTAL_SAVANT',
-    'CORSAIR', 'GRIFFIN_LORD', 'RONIN_MASTER', 'SPIRIT_CALLER', 'WAR_MONK', 'RANGER_KNIGHT',
-    'DOOM_RIDER', 'WYRM_SLAYER', 'MASTER_NINJA', 'AEGIS_GUARD', 'ASTROLOGER',
-  ];
-  const tier3Pool: UnitClassId[] = [
-    'REAVER', 'SILVER_KNIGHT', 'MARKSMAN', 'DARK_DRUID', 'MARSHAL', 'TRUEBLADE', 'DRAGONLORD',
-    'VANGUARD', 'SENTINEL', 'RUNE_BLADE', 'BOW_KNIGHT', 'DREAD_CAPTAIN', 'SUN_GRIFFIN',
-    'SHOGUN_BLADE', 'ELDER_ORACLE', 'IRON_FIST_MASTER', 'HORIZON_LANCER', 'DEATH_KNIGHT',
-    'DRAGON_KNIGHT', 'SHADOW_KAGE', 'HOLY_BASTION', 'TIME_WEAVER',
-  ];
-  const tier4Pool: UnitClassId[] = [
-    'WAR_GOD', 'ASTRAL_CAVALIER', 'STARFALL_ARCHER', 'ABYSSAL_ARCHON', 'TITAN_CITADEL',
-    'SWORD_SAINT', 'SKY_SOVEREIGN', 'LEGEND_CHAMPION', 'SPEAR_EMPEROR', 'AETHER_SOVEREIGN',
-    'TEMPEST_KHAN', 'OCEAN_LEVIATHAN', 'SOLAR_APEX_KNIGHT', 'HEAVEN_KENSEI', 'PRIMORDIAL_AVATAR',
-    'TITAN_DEMIGOD', 'STORM_STRIDER', 'ABYSS_SOVEREIGN', 'ETERNAL_DRAGOON', 'PHANTOM_SHOGUN',
-    'DIVINE_WARDEN', 'ETERNAL_CHRONOS',
-  ];
+  // Theater-specific historical force pools across all 4 tiers & 5 military domains!
+  const getTheaterTierPool = (theater: TheaterProfile | undefined, tier: 1 | 2 | 3 | 4): UnitClassId[] => {
+    const byLineage = (
+      t1: UnitClassId,
+      t2: UnitClassId,
+      t3: UnitClassId,
+      t4: UnitClassId
+    ): UnitClassId => (tier === 1 ? t1 : tier === 2 ? t2 : tier === 3 ? t3 : t4);
+
+    // Core historical branches
+    const rifleInf = byLineage('MERCENARY', 'HERO', 'VANGUARD', 'LEGEND_CHAMPION');
+    const smgAssault = byLineage('MYRMIDON', 'SWORDMASTER', 'TRUEBLADE', 'SWORD_SAINT');
+    const mgFlame = byLineage('FIGHTER', 'BERSERKER', 'REAVER', 'WAR_GOD');
+    const antiTankInf = byLineage('SOLDIER', 'HALBERDIER', 'SENTINEL', 'SPEAR_EMPEROR');
+    const sniperAA = byLineage('ARCHER', 'SNIPER', 'MARKSMAN', 'STARFALL_ARCHER');
+    const sapper = byLineage('BRAWLER', 'WAR_MONK', 'IRON_FIST_MASTER', 'TITAN_DEMIGOD');
+    const marine = byLineage('SAMURAI', 'RONIN_MASTER', 'SHOGUN_BLADE', 'HEAVEN_KENSEI');
+    const commando = byLineage('NINJA', 'MASTER_NINJA', 'SHADOW_KAGE', 'PHANTOM_SHOGUN');
+    const scout = byLineage('THIEF', 'ASSASSIN', 'WHISPER', 'PHANTOM_REAPER');
+    const paratroop = byLineage('SPELLBLADE', 'MORTAL_SAVANT', 'RUNE_BLADE', 'AETHER_SOVEREIGN');
+    const radar = byLineage('CHRONOMANCER', 'ASTROLOGER', 'TIME_WEAVER', 'ETERNAL_CHRONOS');
+    const signal = byLineage('MONK', 'EXORCIST', 'INQUISITOR', 'SOLAR_HIEROPHANT');
+
+    const medTank = byLineage('CAVALIER', 'PALADIN', 'SILVER_KNIGHT', 'ASTRAL_CAVALIER');
+    const heavyTank = byLineage('KNIGHT', 'GENERAL', 'MARSHAL', 'TITAN_CITADEL');
+    const tankDestr = byLineage('DRAGOON', 'WYRM_SLAYER', 'DRAGON_KNIGHT', 'ETERNAL_DRAGOON');
+    const reconArmor = byLineage('NOMAD', 'NOMAD_TROOPER', 'BOW_KNIGHT', 'TEMPEST_KHAN');
+    const apcIfv = byLineage('TROUBADOUR', 'VALKYRIE', 'SERAPH_RIDER', 'CELESTIAL_EMPRESS');
+    const spaaAirArmor = byLineage('OUTRIDER', 'RANGER_KNIGHT', 'HORIZON_LANCER', 'STORM_STRIDER');
+
+    const howitzerMlrs = byLineage('MAGE', 'SAGE', 'ARCHSAGE', 'ASTRAL_ORACLE');
+    const siegeMissile = byLineage('DARK_MAGE', 'NECROMANCER', 'DARK_DRUID', 'ABYSSAL_ARCHON');
+    const thermoRocket = byLineage('SHAMAN', 'SPIRIT_CALLER', 'ELDER_ORACLE', 'PRIMORDIAL_AVATAR');
+
+    const fighter = byLineage('PEGASUS', 'FALCON_KNIGHT', 'SERAPH_KNIGHT', 'CELESTIAL_VALKYRIE');
+    const bomber = byLineage('WYVERN_RIDER', 'WYVERN_LORD', 'DRAGONLORD', 'SKY_SOVEREIGN');
+    const heliTrans = byLineage('GRIFFIN_RIDER', 'GRIFFIN_LORD', 'SUN_GRIFFIN', 'SOLAR_APEX_KNIGHT');
+
+    const warship = byLineage('PIRATE', 'CORSAIR', 'DREAD_CAPTAIN', 'OCEAN_LEVIATHAN');
+    const submarine = byLineage('DARK_KNIGHT', 'DOOM_RIDER', 'DEATH_KNIGHT', 'ABYSS_SOVEREIGN');
+    const carrierLst = byLineage('TEMPLAR', 'AEGIS_GUARD', 'HOLY_BASTION', 'DIVINE_WARDEN');
+
+    switch (theater) {
+      case 'FLEET_NAVAL':
+        return [warship, warship, submarine, carrierLst, fighter, bomber, heliTrans, marine, radar, siegeMissile];
+      case 'AMPHIBIOUS_LANDING':
+        return [marine, marine, sapper, warship, carrierLst, bomber, fighter, mgFlame, howitzerMlrs, antiTankInf, spaaAirArmor];
+      case 'ARMORED_CLASH':
+        return [medTank, medTank, heavyTank, heavyTank, tankDestr, reconArmor, apcIfv, antiTankInf, howitzerMlrs, thermoRocket, bomber, fighter];
+      case 'AIR_DEFENSE':
+        return [fighter, fighter, bomber, bomber, heliTrans, spaaAirArmor, sniperAA, radar, signal, paratroop, siegeMissile];
+      case 'AIRBORNE_BRIDGE':
+        return [paratroop, paratroop, heliTrans, fighter, spaaAirArmor, reconArmor, smgAssault, sniperAA, commando, sapper, medTank];
+      case 'FORTRESS_SIEGE':
+        return [siegeMissile, howitzerMlrs, heavyTank, sapper, mgFlame, rifleInf, sniperAA, antiTankInf, thermoRocket, bomber];
+      case 'URBAN_ASSAULT':
+        return [smgAssault, smgAssault, mgFlame, sapper, sniperAA, rifleInf, heavyTank, tankDestr, thermoRocket, commando, apcIfv];
+      case 'MOUNTAIN_WINTER':
+        return [sniperAA, rifleInf, sapper, commando, scout, howitzerMlrs, mgFlame, medTank, heliTrans, antiTankInf];
+      case 'DESERT_MOBILE':
+        return [medTank, reconArmor, tankDestr, apcIfv, spaaAirArmor, fighter, bomber, rifleInf, howitzerMlrs, heavyTank];
+      case 'RIVER_CANAL':
+        return [sapper, rifleInf, antiTankInf, medTank, howitzerMlrs, marine, warship, sniperAA, mgFlame, heliTrans];
+      case 'JUNGLE_ISLAND':
+        return [marine, commando, scout, sapper, mgFlame, sniperAA, smgAssault, heliTrans, warship, carrierLst, howitzerMlrs];
+      case 'TRENCH_FRONT':
+      default:
+        return [rifleInf, mgFlame, smgAssault, howitzerMlrs, siegeMissile, sapper, sniperAA, antiTankInf, medTank, heavyTank, fighter, reconArmor];
+    }
+  };
+
+  const t1Pool = getTheaterTierPool(meta.theaterProfile, 1);
+  const t2Pool = getTheaterTierPool(meta.theaterProfile, 2);
+  const t3Pool = getTheaterTierPool(meta.theaterProfile, 3);
+  const t4Pool = getTheaterTierPool(meta.theaterProfile, 4);
 
   const poolClasses: UnitClassId[] =
-    meta.actNumber >= 10
-      ? tier4Pool
-      : meta.actNumber === 9
-      ? [...tier4Pool.slice(0, 12), ...tier3Pool.slice(0, 10)]
-      : meta.actNumber >= 7
-      ? tier3Pool
-      : meta.actNumber >= 4
-      ? tier2Pool
-      : meta.actNumber === 3
-      ? [...tier2Pool.slice(0, 10), ...tier1Pool.slice(0, 12)]
-      : tier1Pool;
+    meta.actNumber >= 13
+      ? t4Pool
+      : meta.actNumber === 12
+      ? [...t4Pool.slice(0, 6), ...t3Pool.slice(0, 6)]
+      : meta.actNumber >= 9
+      ? t3Pool
+      : meta.actNumber === 8
+      ? [...t3Pool.slice(0, 6), ...t2Pool.slice(0, 6)]
+      : meta.actNumber >= 5
+      ? t2Pool
+      : meta.actNumber === 4
+      ? [...t2Pool.slice(0, 6), ...t1Pool.slice(0, 6)]
+      : t1Pool;
 
   const healerClass: UnitClassId =
-    meta.actNumber >= 9
+    meta.actNumber >= 13
       ? 'SERAPH_PROPHET'
-      : meta.actNumber >= 7
+      : meta.actNumber >= 9
       ? 'SAINT'
-      : meta.actNumber >= 4
+      : meta.actNumber >= 5
       ? 'BISHOP'
       : 'CLERIC';
+
+  // Track WATER tiles reserved for naval berths & naval enemy warships so road connectivity never overwrites them!
+  const protectedWaterTiles = new Set<string>();
+  const landSpawnKeySet = new Set<string>(playerSpawns.map((p) => `${p.x},${p.y}`));
+
+  // Helper to link a naval WATER tile into the nearest main WATER body using WATER/BRIDGE channel tiles
+  const connectWaterTileToMainChannel = (wx: number, wy: number) => {
+    let bestTarget: TileCoord | null = null;
+    let bestDist = Infinity;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if ((x === wx && y === wy) || protectedWaterTiles.has(`${x},${y}`)) continue;
+        if (grid[y][x] === 'WATER') {
+          const d = Math.abs(x - wx) + Math.abs(y - wy);
+          if (d < bestDist) {
+            bestDist = d;
+            bestTarget = { x, y };
+          }
+        }
+      }
+    }
+    if (!bestTarget || bestDist <= 1) return;
+    let cx = wx;
+    let cy = wy;
+    while (cx !== bestTarget.x || cy !== bestTarget.y) {
+      if (cy !== bestTarget.y && (cx === bestTarget.x || Math.abs(bestTarget.y - cy) >= Math.abs(bestTarget.x - cx))) {
+        cy += cy < bestTarget.y ? 1 : -1;
+      } else {
+        cx += cx < bestTarget.x ? 1 : -1;
+      }
+      const cKey = `${cx},${cy}`;
+      if (
+        cKey === `${throneCoord.x},${throneCoord.y}` ||
+        cKey === `${armoryShopCoord.x},${armoryShopCoord.y}` ||
+        cKey === `${vendorShopCoord.x},${vendorShopCoord.y}` ||
+        grid[cy][cx] === 'FORT'
+      ) {
+        continue;
+      }
+      if (protectedWaterTiles.has(cKey) || grid[cy][cx] === 'WATER') continue;
+      if (landSpawnKeySet.has(cKey) || grid[cy][cx] === 'ROAD' || grid[cy][cx] === 'BRIDGE') {
+        grid[cy][cx] = 'BRIDGE';
+      } else {
+        grid[cy][cx] = 'WATER';
+      }
+    }
+  };
+
+  // Count navigable water on this battlefield; if riverine/coastal/naval, create 3 WATER berths at the tail of playerSpawns!
+  let mapWaterTiles = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (grid[y][x] === 'WATER') mapWaterTiles++;
+    }
+  }
+  const hasNavalTheaterWater =
+    meta.theaterProfile === 'FLEET_NAVAL' ||
+    meta.theaterProfile === 'AMPHIBIOUS_LANDING' ||
+    meta.theaterProfile === 'RIVER_CANAL' ||
+    meta.theaterProfile === 'JUNGLE_ISLAND' ||
+    meta.layout === 'harbor_docks' ||
+    meta.layout === 'river_crossing' ||
+    meta.layout === 'twin_bridges' ||
+    mapWaterTiles >= 14;
+
+  if (hasNavalTheaterWater && mapWaterTiles >= 6 && playerSpawns.length >= 10) {
+    const berthCount = Math.min(3, playerSpawns.length - 8);
+    const navalBerthSpawns = playerSpawns.slice(playerSpawns.length - berthCount);
+    for (const berth of navalBerthSpawns) {
+      const bKey = `${berth.x},${berth.y}`;
+      landSpawnKeySet.delete(bKey);
+      grid[berth.y][berth.x] = 'WATER';
+      protectedWaterTiles.add(bKey);
+    }
+    for (const berth of navalBerthSpawns) {
+      connectWaterTileToMainChannel(berth.x, berth.y);
+    }
+  }
+
+  const nonNavalPool: UnitClassId[] = poolClasses.filter(
+    (c) => CLASS_META[c].moveType !== 'NAVAL'
+  );
+  const safeLandPool: UnitClassId[] = nonNavalPool.length > 0 ? nonNavalPool : ['MERCENARY'];
 
   const occupied = new Set<string>(playerSpawns.map((p) => `${p.x},${p.y}`));
   occupied.add(`${throneCoord.x},${throneCoord.y}`);
@@ -1295,10 +1725,116 @@ export function generateMap(mapId: number): GeneratedMapData {
     return best;
   };
 
+  // Helper: find an orthogonally adjacent foot-passable coastal/pier tile for a WATER tile
+  const findAdjacentLandTile = (x: number, y: number): TileCoord | null => {
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (
+        nx >= 0 &&
+        ny >= 0 &&
+        nx < width &&
+        ny < height &&
+        !protectedWaterTiles.has(`${nx},${ny}`) &&
+        isFootPassable(grid[ny][nx])
+      ) {
+        return { x: nx, y: ny };
+      }
+    }
+    return null;
+  };
+
+  // Ensure every player WATER berth has an adjacent foot-passable pier/shore anchor
+  const connectivityAnchors: TileCoord[] = [];
+  for (const sp of playerSpawns) {
+    if (protectedWaterTiles.has(`${sp.x},${sp.y}`)) {
+      const adj = findAdjacentLandTile(sp.x, sp.y);
+      if (adj) {
+        connectivityAnchors.push(adj);
+      }
+    }
+  }
+
   const enemies: Unit[] = [];
 
-  // 1. Place Map Boss on the Throne
-  const bossLevel = meta.recommendedLevel + (meta.chapterInAct === 12 ? 3 : 2);
+  // 1. Place Map Boss: land/air bosses on Command HQ (Throne); NAVAL bosses strictly on adjacent connected WATER!
+  const bossLevel = meta.recommendedLevel + (meta.chapterInAct >= 12 ? 3 : 2);
+  let bossX = throneCoord.x;
+  let bossY = throneCoord.y;
+  if (CLASS_META[meta.bossClass].moveType === 'NAVAL') {
+    const bossAdjCandidates: TileCoord[] = [
+      { x: throneCoord.x - 1, y: throneCoord.y },
+      { x: throneCoord.x + 1, y: throneCoord.y },
+      { x: throneCoord.x, y: throneCoord.y - 1 },
+      { x: throneCoord.x, y: throneCoord.y + 1 },
+    ].filter(
+      (c) =>
+        c.x >= 1 &&
+        c.x <= width - 2 &&
+        c.y >= 1 &&
+        c.y <= height - 2 &&
+        !occupied.has(`${c.x},${c.y}`)
+    );
+    // Sort existing WATER first, then tiles closer to map center so throne keeps open land approach
+    bossAdjCandidates.sort((a, b) => {
+      const aWater = grid[a.y][a.x] === 'WATER' ? 0 : 1;
+      const bWater = grid[b.y][b.x] === 'WATER' ? 0 : 1;
+      if (aWater !== bWater) return aWater - bWater;
+      return Math.abs(a.y - midY) - Math.abs(b.y - midY);
+    });
+    const chosenBossWater = bossAdjCandidates[0];
+    if (chosenBossWater) {
+      bossX = chosenBossWater.x;
+      bossY = chosenBossWater.y;
+      grid[bossY][bossX] = 'WATER';
+      const bKey = `${bossX},${bossY}`;
+      occupied.add(bKey);
+      protectedWaterTiles.add(bKey);
+      connectWaterTileToMainChannel(bossX, bossY);
+      // Guarantee throneCoord still has at least one foot-passable land approach neighbor
+      let hasThroneFootNeighbor = false;
+      for (const [dx, dy] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ]) {
+        const nx = throneCoord.x + dx;
+        const ny = throneCoord.y + dy;
+        if (
+          nx >= 0 &&
+          ny >= 0 &&
+          nx < width &&
+          ny < height &&
+          !(nx === bossX && ny === bossY) &&
+          isFootPassable(grid[ny][nx])
+        ) {
+          hasThroneFootNeighbor = true;
+        }
+      }
+      if (!hasThroneFootNeighbor) {
+        for (const [dx, dy] of [
+          [-1, 0],
+          [1, 0],
+          [0, -1],
+          [0, 1],
+        ]) {
+          const nx = throneCoord.x + dx;
+          const ny = throneCoord.y + dy;
+          if (nx >= 1 && ny >= 1 && nx < width - 1 && ny < height - 1 && !(nx === bossX && ny === bossY)) {
+            grid[ny][nx] = 'ROAD';
+            break;
+          }
+        }
+      }
+    }
+  }
   enemies.push(
     createEnemyUnit(
       `enemy_boss_${mapId}`,
@@ -1306,8 +1842,8 @@ export function generateMap(mapId: number): GeneratedMapData {
       meta.bossClass,
       bossLevel,
       meta.actNumber,
-      throneCoord.x,
-      throneCoord.y,
+      bossX,
+      bossY,
       'BOSS',
       true,
       meta.bossWeaponId,
@@ -1315,21 +1851,25 @@ export function generateMap(mapId: number): GeneratedMapData {
       false
     )
   );
+  connectivityAnchors.push(throneCoord);
 
-  // 2. Place 1–3 Elite Sub-Commanders on Fort strongpoints outside immediate player spawn
+  // 2. Place 1–3 Elite Sub-Commanders on Bunker/Fort strongpoints (strictly non-naval since FORT is dry land)
   const eliteBudget = area >= 500 ? 3 : mapId >= 24 ? 2 : mapId >= 2 ? 1 : 0;
   const availableForts = fortPositions.filter(
-    (f) => minSafeDistFromSpawn(f.x, f.y) >= 6 && !occupied.has(`${f.x},${f.y}`)
+    (f) =>
+      grid[f.y]?.[f.x] === 'FORT' &&
+      minSafeDistFromSpawn(f.x, f.y) >= 6 &&
+      !occupied.has(`${f.x},${f.y}`)
   );
   for (let eIdx = 0; eIdx < eliteBudget && eIdx < availableForts.length; eIdx++) {
     const fCoord = availableForts[eIdx];
     occupied.add(`${fCoord.x},${fCoord.y}`);
-    const eliteClass = poolClasses[(mapId * 5 + eIdx * 7) % poolClasses.length];
+    const eliteClass = safeLandPool[(mapId * 5 + eIdx * 7) % safeLandPool.length];
     const eliteMeta = CLASS_META[eliteClass];
     enemies.push(
       createEnemyUnit(
         `enemy_elite_${mapId}_${eIdx + 1}`,
-        `Đội Trưởng ${eliteMeta.name}`,
+        `Chỉ Huy ${eliteMeta.name}`,
         eliteClass,
         meta.recommendedLevel + 1,
         meta.actNumber,
@@ -1338,13 +1878,14 @@ export function generateMap(mapId: number): GeneratedMapData {
         'GUARDIAN',
         false,
         undefined,
-        'Đội Trưởng Tinh Nhuệ',
+        'Đơn Vị Tinh Nhuệ',
         true
       )
     );
+    connectivityAnchors.push(fCoord);
   }
 
-  // 3. Place 1–2 Enemy Battlefield Healers near enemy mid-rear / Boss command zone
+  // 3. Place 1–2 Enemy Field Medics near enemy mid-rear / Boss command zone
   const healerBudget = totalEnemyCount >= 14 ? 2 : 1;
   for (let hIdx = 0; hIdx < healerBudget && enemies.length < totalEnemyCount; hIdx++) {
     let hCoord: TileCoord | null = null;
@@ -1361,7 +1902,14 @@ export function generateMap(mapId: number): GeneratedMapData {
         height - 2
       );
       const key = `${tx},${ty}`;
-      if (!occupied.has(key) && isFootPassable(grid[ty][tx]) && minSafeDistFromSpawn(tx, ty) >= 7) {
+      const hMetaCheck = CLASS_META[healerClass];
+      if (
+        !occupied.has(key) &&
+        !protectedWaterTiles.has(key) &&
+        isFootPassable(grid[ty][tx]) &&
+        canUnitStandOnTerrain(hMetaCheck.moveType, grid[ty][tx]) &&
+        minSafeDistFromSpawn(tx, ty) >= 7
+      ) {
         hCoord = { x: tx, y: ty };
         occupied.add(key);
         break;
@@ -1382,20 +1930,65 @@ export function generateMap(mapId: number): GeneratedMapData {
           false
         )
       );
+      connectivityAnchors.push(hCoord);
     }
   }
 
-  // 4. Fill remaining tactical enemy squad across Vanguard, Flanking Wings & Citadel Guard!
+  // 4. Fill remaining tactical enemy squad across Vanguard, Flanking Wings, Naval Escorts & HQ Guard!
   let gruntIndex = 1;
   while (enemies.length < totalEnemyCount) {
     const classIdx = (mapId * 3 + gruntIndex * 2) % poolClasses.length;
-    const classId = poolClasses[classIdx];
-    const cMeta = CLASS_META[classId];
+    let classId = poolClasses[classIdx];
+    let cMeta = CLASS_META[classId];
+
+    let placed: TileCoord | null = null;
+    let anchorForPlaced: TileCoord | null = null;
+
+    // Naval units MUST spawn strictly on WATER tiles adjacent to shore/bridge — NEVER fall back to land!
+    if (cMeta.moveType === 'NAVAL') {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const wx = 1 + Math.floor(rng() * (width - 2));
+        const wy = 1 + Math.floor(rng() * (height - 2));
+        const key = `${wx},${wy}`;
+        if (!occupied.has(key) && grid[wy][wx] === 'WATER' && minSafeDistFromSpawn(wx, wy) >= 5) {
+          const adj = findAdjacentLandTile(wx, wy);
+          if (adj) {
+            placed = { x: wx, y: wy };
+            anchorForPlaced = adj;
+            occupied.add(key);
+            protectedWaterTiles.add(key);
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        for (let wy = 1; wy < height - 1 && !placed; wy++) {
+          for (let wx = 1; wx < width - 1 && !placed; wx++) {
+            const key = `${wx},${wy}`;
+            if (!occupied.has(key) && grid[wy][wx] === 'WATER' && minSafeDistFromSpawn(wx, wy) >= 5) {
+              const adj = findAdjacentLandTile(wx, wy);
+              if (adj) {
+                placed = { x: wx, y: wy };
+                anchorForPlaced = adj;
+                occupied.add(key);
+                protectedWaterTiles.add(key);
+              }
+            }
+          }
+        }
+      }
+      // If no valid coastal water slot remains on this map, convert unit to a non-naval class before land placement!
+      if (!placed) {
+        classId = safeLandPool[(mapId * 3 + gruntIndex * 2) % safeLandPool.length];
+        cMeta = CLASS_META[classId];
+      }
+    }
+
     const primaryWeapon = cMeta.allowedWeaponTypes[0];
     const aiPolicy: AIPolicy =
       primaryWeapon === 'BOW' || primaryWeapon === 'TOME'
         ? 'KITER'
-        : cMeta.moveType === 'ARMORED'
+        : cMeta.moveType === 'ARMORED' || cMeta.moveType === 'NAVAL'
         ? 'GUARDIAN'
         : cMeta.moveType === 'FLYING' ||
           classId.includes('THIEF') ||
@@ -1406,52 +1999,59 @@ export function generateMap(mapId: number): GeneratedMapData {
         ? 'FLANKER'
         : 'CHASER';
 
-    let placed: TileCoord | null = null;
-    for (let attempt = 0; attempt < 60; attempt++) {
-      let tx: number;
-      let ty: number;
-      if (axis === 'CENTER_HOLDOUT') {
-        // Surround central camp from outer perimeter bands!
-        const edge = (gruntIndex + attempt) % 4;
-        tx =
-          edge === 0
-            ? 1 + Math.floor(rng() * 4)
-            : edge === 1
-            ? width - 2 - Math.floor(rng() * 4)
-            : 2 + Math.floor(rng() * (width - 4));
-        ty =
-          edge === 2
-            ? 1 + Math.floor(rng() * 3)
-            : edge === 3
-            ? height - 2 - Math.floor(rng() * 3)
-            : 2 + Math.floor(rng() * (height - 4));
-      } else {
-        const bandRatio = gruntIndex <= 4 ? 0.38 + rng() * 0.22 : 0.55 + rng() * 0.4;
-        tx = clampCoord(
-          Math.round(
-            spawnCentroid.x +
-              (throneCoord.x - spawnCentroid.x) * bandRatio +
-              (rng() - 0.5) * width * 0.45
-          ),
-          1,
-          width - 2
-        );
-        ty = clampCoord(
-          Math.round(
-            spawnCentroid.y +
-              (throneCoord.y - spawnCentroid.y) * bandRatio +
-              (rng() - 0.5) * height * 0.65
-          ),
-          1,
-          height - 2
-        );
-      }
+    if (!placed) {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        let tx: number;
+        let ty: number;
+        if (axis === 'CENTER_HOLDOUT') {
+          const edge = (gruntIndex + attempt) % 4;
+          tx =
+            edge === 0
+              ? 1 + Math.floor(rng() * 4)
+              : edge === 1
+              ? width - 2 - Math.floor(rng() * 4)
+              : 2 + Math.floor(rng() * (width - 4));
+          ty =
+            edge === 2
+              ? 1 + Math.floor(rng() * 3)
+              : edge === 3
+              ? height - 2 - Math.floor(rng() * 3)
+              : 2 + Math.floor(rng() * (height - 4));
+        } else {
+          const bandRatio = gruntIndex <= 4 ? 0.38 + rng() * 0.22 : 0.55 + rng() * 0.4;
+          tx = clampCoord(
+            Math.round(
+              spawnCentroid.x +
+                (throneCoord.x - spawnCentroid.x) * bandRatio +
+                (rng() - 0.5) * width * 0.45
+            ),
+            1,
+            width - 2
+          );
+          ty = clampCoord(
+            Math.round(
+              spawnCentroid.y +
+                (throneCoord.y - spawnCentroid.y) * bandRatio +
+                (rng() - 0.5) * height * 0.65
+            ),
+            1,
+            height - 2
+          );
+        }
 
-      const key = `${tx},${ty}`;
-      if (!occupied.has(key) && isFootPassable(grid[ty][tx]) && minSafeDistFromSpawn(tx, ty) >= 5) {
-        placed = { x: tx, y: ty };
-        occupied.add(key);
-        break;
+        const key = `${tx},${ty}`;
+        if (
+          !occupied.has(key) &&
+          !protectedWaterTiles.has(key) &&
+          isFootPassable(grid[ty][tx]) &&
+          canUnitStandOnTerrain(cMeta.moveType, grid[ty][tx]) &&
+          minSafeDistFromSpawn(tx, ty) >= 5
+        ) {
+          placed = { x: tx, y: ty };
+          anchorForPlaced = placed;
+          occupied.add(key);
+          break;
+        }
       }
     }
 
@@ -1459,9 +2059,12 @@ export function generateMap(mapId: number): GeneratedMapData {
       for (let fy = 1; fy < height - 1 && !placed; fy++) {
         for (let fx = 1; fx < width - 1 && !placed; fx++) {
           const key = `${fx},${fy}`;
-          if (!occupied.has(key) && minSafeDistFromSpawn(fx, fy) >= 5) {
-            if (!isFootPassable(grid[fy][fx])) grid[fy][fx] = 'ROAD';
+          if (!occupied.has(key) && !protectedWaterTiles.has(key) && minSafeDistFromSpawn(fx, fy) >= 5) {
+            if (!isFootPassable(grid[fy][fx]) || !canUnitStandOnTerrain(cMeta.moveType, grid[fy][fx])) {
+              grid[fy][fx] = 'ROAD';
+            }
             placed = { x: fx, y: fy };
+            anchorForPlaced = placed;
             occupied.add(key);
           }
         }
@@ -1483,19 +2086,30 @@ export function generateMap(mapId: number): GeneratedMapData {
         false
       )
     );
+    if (anchorForPlaced) {
+      connectivityAnchors.push(anchorForPlaced);
+    }
     gruntIndex += 1;
   }
 
-  // Guarantee 100% foot connectivity between playerSpawns[0], all spawns, shops, throne & every enemy!
+  // Guarantee 100% foot connectivity between playerSpawns[0], all land spawns, shops, HQ & every enemy shore anchor!
+  const landSpawnsForReach = playerSpawns
+    .slice(1)
+    .filter((sp) => !protectedWaterTiles.has(`${sp.x},${sp.y}`));
   const mustReach: TileCoord[] = [
-    ...playerSpawns.slice(1),
+    ...landSpawnsForReach,
     armoryShopCoord,
     vendorShopCoord,
     throneCoord,
-    ...enemies.map((e) => ({ x: e.x, y: e.y })),
+    ...connectivityAnchors,
   ];
-  ensureConnectivity(grid, playerSpawns[0], mustReach);
+  ensureConnectivity(grid, playerSpawns[0], mustReach, protectedWaterTiles);
 
+  // Final safety restore of special objective & protected naval water tiles
+  for (const wKey of protectedWaterTiles) {
+    const [wxStr, wyStr] = wKey.split(',');
+    grid[Number(wyStr)][Number(wxStr)] = 'WATER';
+  }
   grid[armoryShopCoord.y][armoryShopCoord.x] = 'SHOP_ARMORY';
   grid[vendorShopCoord.y][vendorShopCoord.x] = 'SHOP_VENDOR';
   grid[throneCoord.y][throneCoord.x] = 'THRONE';
